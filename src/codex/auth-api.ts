@@ -142,7 +142,7 @@ function poolAccountDto(
   const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
   return {
     id: account.id,
-    email: maskEmail(account.email) ?? account.email,
+    email: account.email,
     ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(account.plan !== undefined ? { plan: account.plan } : {}),
     ...(account.logLabel !== undefined ? { logLabel: account.logLabel } : {}),
@@ -557,7 +557,7 @@ export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = fa
   });
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
-    email: maskEmail(mainInfo.email) ?? "Codex App login",
+    email: mainInfo.email ?? "Codex App login",
     plan: mainInfo.plan,
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
@@ -1219,11 +1219,11 @@ export async function handleCodexAuthAPI(
       if (!st && accountId && !reauthStatus && getCodexAccountCredential(accountId)) {
         return jsonResponse({ status: "done", accountId });
       }
-      return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });
+      return jsonResponse(st ? { ...st, email: st.email ?? undefined } : { status: "expired" });
     }
     // Legacy fallback: return latest pending flow
     for (const [, st] of codexAuthLoginState) {
-      if (st.status === "pending") return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });
+      if (st.status === "pending") return jsonResponse({ ...st, email: st.email ?? undefined });
     }
     return jsonResponse({ status: "idle" });
   }

@@ -6,6 +6,13 @@ import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
 
+function installerLabel(installer: string | undefined, t: ReturnType<typeof useT>): string {
+  if (installer === "source") return t("dash.installSource");
+  if (installer === "bun") return t("dash.installBun");
+  if (installer === "npm") return t("dash.installNpm");
+  return t("dash.installUnknown");
+}
+
 export function DashboardOverviewHead({
   locale,
   health,
@@ -19,9 +26,14 @@ export function DashboardOverviewHead({
   maHelpOpen,
   setMaHelpOpen,
   switchMaMode,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode">) {
+  updateCheck,
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "updateCheck">) {
   const t = useT();
   const online = health?.status === "ok";
+  const localVersion = updateCheck?.currentVersion ?? health?.version ?? "—";
+  const remoteVersion = updateCheck?.latestVersion ?? "—";
+  const remoteBehind = Boolean(updateCheck?.updateAvailable);
+  const installKind = installerLabel(updateCheck?.installer, t);
 
   return (
     <>
@@ -67,7 +79,22 @@ export function DashboardOverviewHead({
               <span className={`dot ${online ? "dot-green" : "dot-red"}`} />{online ? t("dash.online") : t("dash.offline")}
             </div>
           </div>
-          <div className="stat"><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
+          <div className="stat">
+            <div className="label">{t("dash.versionLocal")}</div>
+            <div className="value mono" title={installKind}>{localVersion}</div>
+            <div className="muted text-label dash-stat-coverage">{installKind}</div>
+          </div>
+          <div className="stat">
+            <div className="label">{t("dash.versionRemote")}</div>
+            <div className="value mono" style={remoteBehind ? { color: "var(--amber, var(--orange, #d97706))" } : undefined}>
+              {remoteVersion}
+            </div>
+            <div className="muted text-label dash-stat-coverage">
+              {updateCheck
+                ? (remoteBehind ? t("dash.updateAvailable") : t("dash.updateCurrent"))
+                : "\u00a0"}
+            </div>
+          </div>
           <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
           <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
           <div className="stat">

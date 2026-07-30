@@ -28,6 +28,12 @@ function localizeCustomQuotaLabel(rawLabel: string, t: TFn): string {
       return t("quota.cursorApiUsage");
     case "Total subscription credits":
       return t("quota.totalSubscriptionCredits");
+    case "Monthly credits":
+      return t("quota.monthlyCredits");
+    case "Request window":
+      return t("quota.requestWindow");
+    case "GrokBuild":
+      return t("quota.grokBuild");
     default:
       return rawLabel;
   }
@@ -61,11 +67,13 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
     });
   }
   if (typeof displayQuota.monthlyPercent === "number") {
+    // xAI billing is monthly API credits (cockpit-like remaining bar); Codex uses a 30-day window.
+    const xaiPlan = typeof plan === "string" && /^(Grok|SuperGrok|Free)/i.test(plan);
     ranked.push({
       rank: 4,
       row: {
-        label: t("codexAuth.monthly"),
-        limitLabel: t("quota.monthlyLimit"),
+        label: xaiPlan ? t("quota.monthlyCredits") : t("codexAuth.monthly"),
+        limitLabel: xaiPlan ? t("quota.monthlyCredits") : t("quota.monthlyLimit"),
         percent: displayQuota.monthlyPercent,
         resetAt: displayQuota.monthlyResetAt,
       },

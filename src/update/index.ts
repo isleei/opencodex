@@ -83,17 +83,34 @@ function logSpawnOutput(label: string, result: { stdout?: string | Buffer | null
   if (stderr) console.error(stderr.length > 4000 ? `${label}${stderr.slice(-4000)}` : stderr);
 }
 
+/** In-process cache so dashboard polls do not re-hit the registry every few seconds. */
+const LATEST_VERSION_TTL_MS = 15 * 60_000;
+const latestVersionCache = new Map<string, { value: string | null; expiresAt: number }>();
+
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
-export function latestVersion(tag: string): string | null {
+export function latestVersion(tag: string, now = Date.now()): string | null {
+  const cached = latestVersionCache.get(tag);
+  if (cached && cached.expiresAt > now) return cached.value;
+
   const npm = npmSpawnTarget(["view", `${PKG}@${tag}`, "version"]);
-  if (!npm) return null;
+  if (!npm) {
+    latestVersionCache.set(tag, { value: null, expiresAt: now + LATEST_VERSION_TTL_MS });
+    return null;
+  }
   const r = spawnSync(npm.bin, npm.args, {
     encoding: "utf8",
     timeout: 12000,
     windowsHide: true,
     ...npm.options,
   });
-  return r.status === 0 ? (r.stdout.trim() || null) : null;
+  const value = r.status === 0 ? (r.stdout.trim() || null) : null;
+  latestVersionCache.set(tag, { value, expiresAt: now + LATEST_VERSION_TTL_MS });
+  return value;
+}
+
+/** Test helper — clears the registry version cache. */
+export function clearLatestVersionCache(): void {
+  latestVersionCache.clear();
 }
 
 /** The global-install command opencodex would run to update on this channel. */

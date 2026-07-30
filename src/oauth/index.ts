@@ -2,7 +2,6 @@ import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./typ
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
-import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, clearOAuthRefreshIntent } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
@@ -886,17 +885,19 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   const cred = getCredential(provider);
   const st = loginState.get(provider);
   const set = getAccountSet(provider);
+  // Full email on purpose: local dashboard/CLI account management needs to distinguish
+  // multiauth slots (masked local-parts collide). Tokens stay out of this surface.
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
     ...(a.alias ? { alias: a.alias } : {}),
-    email: maskEmail(a.credential.email) ?? undefined,
+    email: a.credential.email ?? undefined,
     active: a.id === set.activeAccountId,
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,
   }));
   return {
     loggedIn: !!cred,
-    email: maskEmail(cred?.email) ?? undefined,
+    email: cred?.email ?? undefined,
     source: cred?.source,
     error: st?.error,
     done: st?.done ?? false,
@@ -904,7 +905,7 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   };
 }
 
-/** Token-safe per-provider login state for the CLI `ocx status` logins section (no tokens, masked email). */
+/** Token-safe per-provider login state for the CLI `ocx status` logins section (no tokens). */
 export function oauthLoginSummary(): Array<{ provider: string; loggedIn: boolean; email?: string }> {
   return listOAuthProviders().map(provider => {
     const status = getLoginStatus(provider);

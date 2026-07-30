@@ -198,9 +198,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         }),
       };
     };
-    // Per-account rate limits: Anthropic reports usage per credential, so every logged-in
-    // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
-    // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
+    // Per-account rate limits: Anthropic (5h/weekly) and xAI (monthly credits + plan badge)
+    // report usage per credential, so every logged-in account can show its own bars — not
+    // just the active one. Opt-in via ?quota=1 so the plain account list stays a cheap local
+    // read; ?refresh=1 bypasses the TTL.
     const wantQuota = url.searchParams.get("quota") === "1" && supportsPerAccountQuota(provider);
     if (!wantQuota) return jsonResponse(projectAccounts());
     const forceRefresh = url.searchParams.get("refresh") === "1";
@@ -217,6 +218,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         return {
           ...account,
           quota: row.quota,
+          ...(row.plan ? { plan: row.plan } : {}),
           ...(row.unavailable ? { quotaUnavailable: true } : {}),
         };
       }),

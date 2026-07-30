@@ -199,11 +199,67 @@ describe("fetchProviderAccountQuotas", () => {
 
   test("providers without a per-account usage API are skipped", async () => {
     expect(supportsPerAccountQuota("anthropic")).toBe(true);
+    expect(supportsPerAccountQuota("xai")).toBe(true);
     expect(supportsPerAccountQuota("kiro")).toBe(false);
     let called = false;
     globalThis.fetch = (async () => { called = true; return new Response("{}", { status: 200 }); }) as typeof fetch;
     expect(await fetchProviderAccountQuotas("kiro")).toEqual([]);
     expect(called).toBe(false);
+  });
+
+  test("xAI reports monthly + weekly bars from billing and credits format", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("xai", {
+      access: "xai-token-a", refresh: "xai-refresh-a", expires,
+      accountId: "xai-a", email: "a@example.com",
+    });
+    await saveCredential("xai", {
+      access: "xai-token-b", refresh: "xai-refresh-b", expires,
+      accountId: "xai-b", email: "b@example.com",
+    });
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/user")) {
+        return new Response(JSON.stringify({ hasGrokCodeAccess: true }), { status: 200 });
+      }
+      // CPA-Manager-Plus / CLIProxyAPI: weekly pool lives on ?format=credits
+      if (url.includes("format=credits")) {
+        return new Response(JSON.stringify({
+          config: {
+            currentPeriod: {
+              type: "USAGE_PERIOD_TYPE_WEEKLY",
+              end: "2026-08-03T00:00:00+00:00",
+            },
+            creditUsagePercent: 55,
+            productUsage: [{ product: "GrokBuild", usagePercent: 55 }],
+          },
+        }), { status: 200 });
+      }
+      if (url.includes("/v1/billing")) {
+        return new Response(JSON.stringify({
+          config: {
+            monthlyLimit: { val: 15000 },
+            used: { val: 7500 },
+            billingPeriodEnd: "2026-08-01T00:00:00+00:00",
+          },
+        }), { status: 200 });
+      }
+      if (url.endsWith("/v1/chat/completions")) {
+        return new Response("{}", { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("xai");
+    expect(rows.length).toBe(2);
+    for (const row of rows) {
+      expect(row.plan).toBe("Grok Pro");
+      expect(row.quota?.monthlyPercent).toBe(50);
+      // From billing?format=credits creditUsagePercent
+      expect(row.quota?.weeklyPercent).toBe(55);
+      expect(row.quota?.customWindows?.some(w => w.label === "GrokBuild" && w.percent === 55)).toBe(true);
+    }
   });
 
   test("a provider with no logged-in accounts yields no rows and no upstream calls", async () => {

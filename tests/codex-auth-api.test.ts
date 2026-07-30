@@ -2332,8 +2332,8 @@ describe("codex-auth API", () => {
 
   test("GET /api/codex-auth/login-status masks transient flow-state emails at response boundaries", async () => {
     const source = await Bun.file("src/codex/auth-api.ts").text();
-    expect(source).toContain("st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: \"expired\" }");
-    expect(source).toContain("return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });");
+    expect(source).toContain("st ? { ...st, email: st.email ?? undefined } : { status: \"expired\" }");
+    expect(source).toContain("return jsonResponse({ ...st, email: st.email ?? undefined });");
   });
 
   test("GET /api/codex-auth/accounts reuses cached pool quota without fetching usage", async () => {

@@ -211,7 +211,9 @@ export function checkForUpdate(
   const current = deps.currentVersion();
   const installer = deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" ? null : deps.latestVersion(channel);
+  // Always resolve the registry version so the dashboard can show local vs remote,
+  // even for source checkouts (which stay manual-only for installation).
+  const latest = deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
   let command = installer === "source" ? manualSourceCommand() : updateExecutionCommand(installer, channel).display;

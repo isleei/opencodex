@@ -56,11 +56,18 @@ export function DashboardDialogs(d: Dash) {
             <div className="update-box">
               <div className="spread">
                 <div>
-                  <div className="muted text-label">{t("dash.updateInstalled")}</div>
+                  <div className="muted text-label">{t("dash.versionLocal")}</div>
                   <div className="mono">{updateCheck.currentVersion}</div>
+                  <div className="muted text-label" style={{ marginTop: 4 }}>
+                    {updateCheck.installer === "source"
+                      ? t("dash.installSource")
+                      : updateCheck.installer === "bun"
+                        ? t("dash.installBun")
+                        : t("dash.installNpm")}
+                  </div>
                 </div>
                 <div>
-                  <div className="muted text-label">{t("dash.updateLatest")}</div>
+                  <div className="muted text-label">{t("dash.versionRemote")}</div>
                   <div className="mono">{updateCheck.latestVersion ?? "—"}</div>
                 </div>
                 <span className={`badge ${updateCheck.updateAvailable ? "badge-green" : "badge-muted"}`}>

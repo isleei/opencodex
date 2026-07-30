@@ -119,6 +119,26 @@ export function useDashboardData(apiBase: string) {
     }
   }, []);
 
+  // Quiet version summary for the overview head (local vs npm remote). Does not open the
+  // update dialog, does not flip the dialog spinner, and does not share the dialog request epoch.
+  useEffect(() => {
+    if (!health?.version) return;
+    const channel = defaultUpdateChannel(health.version);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/update/check?tag=${channel}`);
+        const check = await requireJson<UpdateCheckData>(res, "update check failed");
+        if (cancelled) return;
+        // Do not clobber a dialog-driven in-flight check (it clears then reloads updateCheck).
+        setUpdateCheck(prev => (updateOpen && updateLoading ? prev : check));
+      } catch {
+        /* overview can show local version alone if registry is unreachable */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiBase, health?.version]);
+
   const startupHealthRef = useRef<StartupHealthStatus | null>(null);
   /** Bumped whenever the dedicated startup-health poll commits; core polls ignore older generations. */
   const startupHealthGenerationRef = useRef(0);

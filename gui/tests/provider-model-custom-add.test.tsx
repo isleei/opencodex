@@ -45,7 +45,7 @@ async function mountProviderModels(
   onRetryModels?: () => void,
   providerItem = item,
   hasLiveModels = true,
-): Promise<{ root: Root; container: HTMLElement; input: HTMLInputElement; addButton: HTMLButtonElement }> {
+): Promise<{ root: Root; container: HTMLElement; openAdd: HTMLButtonElement }> {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
@@ -65,10 +65,26 @@ async function mountProviderModels(
       </LanguageProvider>,
     );
   });
-  const input = container.querySelector<HTMLInputElement>('input[aria-label="Add custom model"]')!;
-  const addButton = [...container.querySelectorAll("button")]
+  // Wait for custom-models GET to settle when it resolves synchronously.
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const openAdd = container.querySelector<HTMLButtonElement>('button[aria-label="Add custom model"]')!;
+  return { root, container, openAdd };
+}
+
+async function openAddModal(openAdd: HTMLButtonElement): Promise<{
+  input: HTMLInputElement;
+  saveButton: HTMLButtonElement;
+  dialog: HTMLElement;
+}> {
+  await act(async () => {
+    openAdd.click();
+    await Promise.resolve();
+  });
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Add custom model"]')!;
+  const saveButton = [...dialog.querySelectorAll("button")]
     .find(button => button.textContent?.trim() === "Add") as HTMLButtonElement;
-  return { root, container, input, addButton };
+  return { input, saveButton, dialog };
 }
 
 async function enterModelId(input: HTMLInputElement, value: string): Promise<void> {
@@ -79,7 +95,18 @@ async function enterModelId(input: HTMLInputElement, value: string): Promise<voi
   });
 }
 
-test("quick-add submits the trimmed model id for the current provider", async () => {
+async function enterDisplayName(dialog: HTMLElement, value: string): Promise<void> {
+  const labels = [...dialog.querySelectorAll("label")];
+  const label = labels.find(node => node.textContent?.includes("Display name"))!;
+  const input = label.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+}
+
+test("full-form add submits model id plus optional metadata for the current provider", async () => {
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
   globalThis.fetch = (async (input, init) => {
     if (!init?.method || init.method === "GET") return Response.json([]);
@@ -88,86 +115,110 @@ test("quick-add submits the trimmed model id for the current provider", async ()
       method: init?.method ?? "GET",
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     });
-    return Response.json({ id: "custom-1" }, { status: 201 });
+    return Response.json({
+      id: "custom-1",
+      provider: "AiCodeWith",
+      modelId: "claude-opus-5.1",
+      displayName: "Opus 5.1",
+      contextWindow: 200000,
+      inputModalities: ["text", "image"],
+    }, { status: 201 });
   }) as typeof fetch;
 
   let refreshes = 0;
-  const { root, container, input, addButton } = await mountProviderModels(
+  const { root, container, openAdd } = await mountProviderModels(
     ["claude-opus-5"],
     () => { refreshes += 1; },
   );
+  const { input, saveButton, dialog } = await openAddModal(openAdd);
   await enterModelId(input, "  claude-opus-5.1  ");
+  await enterDisplayName(dialog, "Opus 5.1");
+
   await act(async () => {
-    addButton.click();
+    saveButton.click();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
-  expect(requests).toEqual([{
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
     url: "http://localhost:10100/api/custom-models",
     method: "POST",
-    body: { provider: "AiCodeWith", modelId: "claude-opus-5.1" },
-  }]);
+  });
+  const body = requests[0]!.body as Record<string, unknown>;
+  expect(body.provider).toBe("AiCodeWith");
+  expect(body.modelId).toBe("claude-opus-5.1");
+  expect(body.displayName).toBe("Opus 5.1");
+  // Default modality selection is text-only until the user toggles more.
+  expect(body.inputModalities).toEqual(["text"]);
   expect(refreshes).toBe(1);
-  expect(input.value).toBe("");
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Custom model added");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
 
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add blocks existing and namespaced model ids", async () => {
+test("full-form blocks existing and namespaced model ids", async () => {
   let requests = 0;
   globalThis.fetch = (async (_input, init) => {
     if (!init?.method || init.method === "GET") return Response.json([]);
     requests += 1;
     return Response.json({ id: "unexpected" }, { status: 201 });
   }) as typeof fetch;
-  const { root, input, addButton } = await mountProviderModels();
+  const { root, openAdd } = await mountProviderModels();
+  const { input, saveButton } = await openAddModal(openAdd);
 
   await enterModelId(input, "claude-opus-5");
-  expect(addButton.disabled).toBe(true);
+  expect(saveButton.disabled).toBe(true);
   await enterModelId(input, "vendor/model");
-  expect(addButton.disabled).toBe(true);
+  expect(saveButton.disabled).toBe(true);
   expect(requests).toBe(0);
 
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add keeps the model id when the server rejects it", async () => {
+test("full-form keeps the model id when the server rejects it", async () => {
   globalThis.fetch = (async (_input, init) => (
     !init?.method || init.method === "GET"
       ? Response.json([])
       : Response.json({ error: "duplicate model" }, { status: 409 })
   )) as typeof fetch;
-  const { root, container, input, addButton } = await mountProviderModels();
+  const { root, openAdd } = await mountProviderModels();
+  const { input, saveButton, dialog } = await openAddModal(openAdd);
   await enterModelId(input, "claude-opus-5.1");
 
   await act(async () => {
-    addButton.click();
+    saveButton.click();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
   expect(input.value).toBe("claude-opus-5.1");
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Failed to save custom model");
+  expect(dialog.querySelector('[role="alert"]')?.textContent
+    || dialog.textContent).toContain("Failed to save custom model");
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add recovers from a network failure", async () => {
+test("full-form recovers from a network failure", async () => {
   globalThis.fetch = (async (_input, init) => {
     if (!init?.method || init.method === "GET") return Response.json([]);
     throw new Error("offline");
   }) as typeof fetch;
-  const { root, container, input, addButton } = await mountProviderModels();
+  const { root, openAdd } = await mountProviderModels();
+  const { input, saveButton, dialog } = await openAddModal(openAdd);
   await enterModelId(input, "claude-opus-5.1");
 
   await act(async () => {
-    addButton.click();
+    saveButton.click();
     await Promise.resolve();
     await Promise.resolve();
   });
 
   expect(input.disabled).toBe(false);
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Network error");
+  expect(dialog.querySelector('[role="alert"]')?.textContent
+    || dialog.textContent).toContain("Network error");
 
   await act(async () => { root.unmount(); });
 });
@@ -178,9 +229,7 @@ test("custom-only catalog keeps configured fallback models visible", async () =>
     { id: "custom-1", provider: "AiCodeWith", modelId: "claude-opus-5.1-custom" },
   ])) as typeof fetch;
 
-  // Discovery returned nothing for this provider, so the configured fallback must stay visible.
   const { root, container } = await mountProviderModels(["claude-opus-5.1-custom"], undefined, item, false);
-  await act(async () => { await Promise.resolve(); });
 
   const modelIds = [...container.querySelectorAll(".pws-model-id")].map(node => node.textContent);
   expect(modelIds).toEqual(["claude-opus-5", "claude-opus-5.1-custom"]);
@@ -204,13 +253,12 @@ test("a failed custom-model lookup recovers through retry without a remount", as
     return Response.json({ id: "custom-9", provider: "AiCodeWith", modelId: "claude-opus-5.1" });
   }) as typeof fetch;
 
-  const { root, container, input, addButton } = await mountProviderModels();
+  const { root, container, openAdd } = await mountProviderModels();
   await act(async () => { await Promise.resolve(); });
 
   // The first load failed, so Add must be blocked and a retry affordance must be offered.
   expect(getCalls).toBe(1);
-  await enterModelId(input, "claude-opus-5.1");
-  expect(addButton.disabled).toBe(true);
+  expect(openAdd.disabled).toBe(true);
   const alert = container.querySelector('[role="alert"]')!;
   expect(alert.textContent).toContain("Network error");
   const retryButton = [...alert.querySelectorAll("button")]
@@ -221,26 +269,30 @@ test("a failed custom-model lookup recovers through retry without a remount", as
 
   // The retry refetched in the same mount and Add is usable again.
   expect(getCalls).toBe(2);
-  expect(addButton.disabled).toBe(false);
+  expect(openAdd.disabled).toBe(false);
 
-  await act(async () => { addButton.click(); await Promise.resolve(); await Promise.resolve(); });
+  const { input, saveButton } = await openAddModal(openAdd);
+  await enterModelId(input, "claude-opus-5.1");
+  await act(async () => { saveButton.click(); await Promise.resolve(); await Promise.resolve(); });
   expect(posts).toHaveLength(1);
 
   await act(async () => { root.unmount(); });
 });
 
-test("successful quick-add appears immediately when catalog refresh is unavailable", async () => {
+test("successful full-form add appears immediately when catalog refresh is unavailable", async () => {
   globalThis.fetch = (async (_input, init) => (
     !init?.method || init.method === "GET"
       ? Response.json([])
-      : Response.json({ id: "custom-1" }, { status: 201 })
+      : Response.json({ id: "custom-1", provider: "AiCodeWith", modelId: "claude-opus-5.1-custom" }, { status: 201 })
   )) as typeof fetch;
   const emptyItem = { ...item, models: [], defaultModel: undefined } as WorkspaceItem;
-  const { root, container, input, addButton } = await mountProviderModels([], undefined, emptyItem);
+  const { root, container, openAdd } = await mountProviderModels([], undefined, emptyItem);
+  const { input, saveButton } = await openAddModal(openAdd);
   await enterModelId(input, "claude-opus-5.1-custom");
 
   await act(async () => {
-    addButton.click();
+    saveButton.click();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
@@ -248,7 +300,7 @@ test("successful quick-add appears immediately when catalog refresh is unavailab
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add waits for custom-model duplicate knowledge", async () => {
+test("full-form waits for custom-model duplicate knowledge", async () => {
   let resolveLookup!: (response: Response) => void;
   const lookup = new Promise<Response>(resolve => { resolveLookup = resolve; });
   let posts = 0;
@@ -258,22 +310,26 @@ test("quick-add waits for custom-model duplicate knowledge", async () => {
     return Response.json({ id: "unexpected" }, { status: 201 });
   }) as typeof fetch;
   const emptyItem = { ...item, models: [], defaultModel: undefined } as WorkspaceItem;
-  const { root, input, addButton } = await mountProviderModels([], undefined, emptyItem);
-  await enterModelId(input, "already-custom");
+  const { root, openAdd } = await mountProviderModels([], undefined, emptyItem);
 
-  expect(addButton.disabled).toBe(true);
+  expect(openAdd.disabled).toBe(true);
   await act(async () => {
-    resolveLookup(Response.json([{ provider: "AiCodeWith", modelId: "already-custom" }]));
+    resolveLookup(Response.json([{ id: "c1", provider: "AiCodeWith", modelId: "already-custom" }]));
     await lookup;
     await Promise.resolve();
+    await Promise.resolve();
   });
-  expect(addButton.disabled).toBe(true);
+  expect(openAdd.disabled).toBe(false);
+
+  const { input, saveButton } = await openAddModal(openAdd);
+  await enterModelId(input, "already-custom");
+  expect(saveButton.disabled).toBe(true);
   expect(posts).toBe(0);
 
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add stays blocked when custom-model lookup fails", async () => {
+test("full-form stays blocked when custom-model lookup fails", async () => {
   let posts = 0;
   globalThis.fetch = (async (_input, init) => {
     if (!init?.method || init.method === "GET") throw new Error("offline");
@@ -281,12 +337,111 @@ test("quick-add stays blocked when custom-model lookup fails", async () => {
     return Response.json({ id: "unexpected" }, { status: 201 });
   }) as typeof fetch;
   const emptyItem = { ...item, models: [], defaultModel: undefined } as WorkspaceItem;
-  const { root, input, addButton } = await mountProviderModels([], undefined, emptyItem);
-  await enterModelId(input, "unknown-custom");
+  const { root, openAdd } = await mountProviderModels([], undefined, emptyItem);
   await act(async () => { await Promise.resolve(); });
 
-  expect(addButton.disabled).toBe(true);
+  expect(openAdd.disabled).toBe(true);
   expect(posts).toBe(0);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("edit updates display name, context, and modalities", async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  globalThis.fetch = (async (input, init) => {
+    if (!init?.method || init.method === "GET") {
+      return Response.json([{
+        id: "custom-1",
+        provider: "AiCodeWith",
+        modelId: "claude-opus-5.1-custom",
+        displayName: "Old",
+        contextWindow: 128000,
+        inputModalities: ["text"],
+      }]);
+    }
+    requests.push({
+      url: String(input),
+      method: init.method ?? "GET",
+      body: typeof init.body === "string" ? JSON.parse(init.body) : undefined,
+    });
+    return Response.json({
+      id: "custom-1",
+      provider: "AiCodeWith",
+      modelId: "claude-opus-5.1-custom",
+      displayName: "New Name",
+      contextWindow: 272000,
+      inputModalities: ["text", "image"],
+    });
+  }) as typeof fetch;
+
+  const { root, container } = await mountProviderModels(["claude-opus-5.1-custom"], undefined, item, false);
+  const editButton = [...container.querySelectorAll("button")]
+    .find(button => button.textContent?.trim() === "Edit") as HTMLButtonElement;
+  expect(editButton).toBeDefined();
+
+  await act(async () => {
+    editButton.click();
+    await Promise.resolve();
+  });
+
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  await enterDisplayName(dialog, "New Name");
+
+  const updateButton = [...dialog.querySelectorAll("button")]
+    .find(button => button.textContent?.trim() === "Update") as HTMLButtonElement;
+  expect(updateButton).toBeDefined();
+  expect(updateButton.disabled).toBe(false);
+  await act(async () => {
+    updateButton.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.method).toBe("PUT");
+  expect(String(requests[0]?.url)).toContain("/api/custom-models/custom-1");
+  const body = requests[0]!.body as Record<string, unknown>;
+  expect(body.modelId).toBe("claude-opus-5.1-custom");
+  expect(body.displayName).toBe("New Name");
+  expect(body.inputModalities).toEqual(["text"]);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("delete removes a custom model after confirm", async () => {
+  const methods: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    if (!init?.method || init.method === "GET") {
+      return Response.json([{
+        id: "custom-1",
+        provider: "AiCodeWith",
+        modelId: "claude-opus-5.1-custom",
+      }]);
+    }
+    methods.push(init.method ?? "GET");
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+
+  const confirmCalls: string[] = [];
+  testWindow.confirm = ((message?: string) => {
+    confirmCalls.push(String(message ?? ""));
+    return true;
+  }) as typeof testWindow.confirm;
+
+  const { root, container } = await mountProviderModels(["claude-opus-5.1-custom"], undefined, item, false);
+  const deleteButton = [...container.querySelectorAll("button")]
+    .find(button => button.textContent?.trim() === "Delete") as HTMLButtonElement;
+  expect(deleteButton).toBeDefined();
+
+  await act(async () => {
+    deleteButton.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(confirmCalls.length).toBe(1);
+  expect(methods).toEqual(["DELETE"]);
+  expect(container.querySelector(".pws-model-id")?.textContent).toBe("claude-opus-5");
 
   await act(async () => { root.unmount(); });
 });

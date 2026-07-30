@@ -22,8 +22,10 @@ export interface OAuthAccount {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
-  /** Per-account rate limits (providers that report usage per credential, e.g. anthropic). */
+  /** Per-account rate limits (providers that report usage per credential, e.g. anthropic / xai). */
   quota?: AccountQuota | null;
+  /** Best-effort plan/tier badge (e.g. xAI "Grok Pro"). */
+  plan?: string;
   /** Set when the per-account probe could not reach upstream (expired login, 429, network). */
   quotaUnavailable?: boolean;
 }

@@ -74,6 +74,18 @@ const helpEntries: Record<string, HelpEntry> = {
       "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
     ],
   },
+  "sync-cloud": {
+    usage: "ocx sync-cloud <login|logout|status|set-client-id|push|pull> ...",
+    summary: "OneDrive cloud backup/restore for ~/.opencodex (Microsoft login).",
+    details: [
+      "Requires a Microsoft public-client app ID (Azure portal, once).",
+      "login: device-code Microsoft sign-in for OneDrive.",
+      "push [--passphrase <p>] [--include-usage]: upload config + optional encrypted auth vault.",
+      "pull --yes [--passphrase <p>]: download and apply (overwrites local).",
+      "Auth/tokens never leave the machine unencrypted — vault uses AES-256-GCM.",
+      "Does not replace `ocx sync` (Codex model catalog).",
+    ],
+  },
   "sync-cache": {
     usage: "ocx sync-cache [--restart-codex]",
     summary: "Refresh Codex's model cache from the active catalog.",
@@ -269,6 +281,7 @@ Usage:
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
+  ocx sync-cloud <sub>        OneDrive cloud backup/restore (Microsoft login)
   ocx status                  Check proxy server status
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset

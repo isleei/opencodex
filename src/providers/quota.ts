@@ -154,6 +154,273 @@ function centsValue(value: unknown): number | undefined {
   return rec ? toFiniteNumber(rec.val) : undefined;
 }
 
+/** Money fields may be `{ val: number }` (cents or dollars) or bare numbers. */
+function moneyValue(value: unknown): number | undefined {
+  return centsValue(value) ?? toFiniteNumber(value);
+}
+
+/** Grok CLI billing + rate-limit windows used for plan badges and quota bars. */
+export interface XaiAccountUsage {
+  quota: ProviderQuota | null;
+  plan: string;
+}
+
+export interface XaiRateLimitWindows {
+  /** Used% of the CLI token window (shared SuperGrok compute pool best-effort). */
+  tokenUsedPercent?: number;
+  requestUsedPercent?: number;
+  tokensLimit?: number;
+  tokensRemaining?: number;
+  requestsLimit?: number;
+  requestsRemaining?: number;
+}
+
+/**
+ * Infer a cockpit-style plan label from Grok CLI billing.
+ * Consumer web task counts (high-freq / standard) are not on this OAuth surface.
+ */
+export function inferXaiPlan(
+  monthlyLimit: number | undefined,
+  weeklyLimit: number | undefined,
+  hasGrokCodeAccess: boolean | undefined,
+): string {
+  if (typeof monthlyLimit === "number" && monthlyLimit >= 15_000) return "Grok Pro";
+  if (typeof monthlyLimit === "number" && monthlyLimit > 0) return "SuperGrok";
+  if (typeof weeklyLimit === "number" && weeklyLimit > 0) return "SuperGrok";
+  if (hasGrokCodeAccess) return "Grok Build";
+  // Prefer "Grok Free" so GUI Codex plan filters (isThirtyDayOnlyPlan) do not strip weekly bars.
+  return "Grok Free";
+}
+
+function usedPercentFromLimitRemaining(limit: number | undefined, remaining: number | undefined): number | undefined {
+  if (limit === undefined || remaining === undefined || limit <= 0) return undefined;
+  const used = Math.max(0, limit - remaining);
+  return normalizePercent((used / limit) * 100);
+}
+
+/**
+ * Merge monthly billing + credits-format weekly billing (CPA-Manager-Plus / CLIProxyAPI ecosystem).
+ * Weekly source of truth: GET /v1/billing?format=credits → creditUsagePercent + productUsage.
+ * Monthly: GET /v1/billing → monthlyLimit/used.
+ */
+export function parseXaiBillingPayload(
+  monthlyBillingBody: unknown,
+  userBody?: unknown,
+  rateLimits?: XaiRateLimitWindows | null,
+  creditsBillingBody?: unknown,
+  now = Date.now(),
+): XaiAccountUsage | null {
+  const monthlyBody = asRecord(monthlyBillingBody);
+  const monthlyConfig = asRecord(monthlyBody?.config) ?? monthlyBody;
+  const creditsBody = asRecord(creditsBillingBody);
+  const creditsConfig = asRecord(creditsBody?.config) ?? creditsBody;
+
+  if (!monthlyConfig && !creditsConfig && !rateLimits) return null;
+
+  const monthlyLimit = monthlyConfig
+    ? moneyValue(monthlyConfig.monthlyLimit ?? monthlyConfig.monthly_limit)
+    : undefined;
+  const monthlyUsed = monthlyConfig
+    ? moneyValue(monthlyConfig.used ?? monthlyConfig.monthlyUsed ?? monthlyConfig.monthly_used)
+    : undefined;
+  const monthlyResetAt = monthlyConfig
+    ? normalizeResetAt(monthlyConfig.billingPeriodEnd ?? monthlyConfig.billing_period_end)
+    : undefined;
+
+  // Dollar weekly fields (legacy / rare) on either payload.
+  const dollarWeeklyLimit = moneyValue(
+    creditsConfig?.weeklyLimit ?? creditsConfig?.weekly_limit
+    ?? monthlyConfig?.weeklyLimit ?? monthlyConfig?.weekly_limit,
+  );
+  const dollarWeeklyUsed = moneyValue(
+    creditsConfig?.weeklyUsed ?? creditsConfig?.weekly_used
+    ?? monthlyConfig?.weeklyUsed ?? monthlyConfig?.weekly_used,
+  );
+
+  // Credits format: unified SuperGrok weekly pool (CPA xai_probe.go parseXAIBillingSummary).
+  const creditUsagePercent = creditsConfig
+    ? normalizePercent(creditsConfig.creditUsagePercent ?? creditsConfig.credit_usage_percent)
+    : undefined;
+  const currentPeriod = asRecord(creditsConfig?.currentPeriod ?? creditsConfig?.current_period);
+  const periodType = typeof currentPeriod?.type === "string" ? currentPeriod.type.toLowerCase() : "";
+  const weeklyResetAt = normalizeResetAt(
+    currentPeriod?.end
+    ?? creditsConfig?.billingPeriodEnd
+    ?? creditsConfig?.billing_period_end,
+  );
+
+  const user = asRecord(userBody);
+  const hasGrokCodeAccess = user?.hasGrokCodeAccess === true;
+  const plan = inferXaiPlan(monthlyLimit, dollarWeeklyLimit ?? (creditUsagePercent !== undefined ? 1 : undefined), hasGrokCodeAccess);
+
+  let monthlyPercent: number | undefined;
+  if (monthlyLimit !== undefined && monthlyLimit > 0 && monthlyUsed !== undefined) {
+    monthlyPercent = normalizePercent((monthlyUsed / monthlyLimit) * 100);
+  }
+
+  let weeklyPercent: number | undefined;
+  if (dollarWeeklyLimit !== undefined && dollarWeeklyLimit > 0 && dollarWeeklyUsed !== undefined) {
+    weeklyPercent = normalizePercent((dollarWeeklyUsed / dollarWeeklyLimit) * 100);
+  } else if (creditUsagePercent !== undefined) {
+    // CPA/CLIProxyAPI: primary weekly pool from billing?format=credits
+    weeklyPercent = creditUsagePercent;
+  } else if (rateLimits?.tokenUsedPercent !== undefined) {
+    // Fallback: CLI token window when credits omits creditUsagePercent (seen on some SuperGrok accounts).
+    weeklyPercent = rateLimits.tokenUsedPercent;
+  } else if (periodType.includes("weekly") && creditUsagePercent === undefined) {
+    // Credits acknowledges a weekly period but gives no %. Show 0 rather than hiding the bar.
+    weeklyPercent = 0;
+  }
+
+  const customWindows: ProviderQuotaWindow[] = [];
+  // productUsage from credits format (e.g. GrokBuild) — same labels as cockpit/CPA.
+  const productUsage = creditsConfig?.productUsage ?? creditsConfig?.product_usage;
+  if (Array.isArray(productUsage)) {
+    for (const raw of productUsage) {
+      const item = asRecord(raw);
+      if (!item) continue;
+      const product = typeof item.product === "string" && item.product.trim()
+        ? item.product.trim()
+        : "Product";
+      const pct = normalizePercent(item.usagePercent ?? item.usage_percent);
+      if (pct === undefined) continue;
+      customWindows.push({
+        label: product,
+        percent: pct,
+        ...(weeklyResetAt !== undefined ? { resetAt: weeklyResetAt } : {}),
+      });
+    }
+  }
+  if (rateLimits?.requestUsedPercent !== undefined) {
+    customWindows.push({
+      label: "Request window",
+      percent: rateLimits.requestUsedPercent,
+    });
+  }
+
+  if (
+    monthlyPercent === undefined
+    && weeklyPercent === undefined
+    && customWindows.length === 0
+  ) {
+    return { quota: null, plan };
+  }
+
+  const quota: ProviderQuota = {
+    ...(monthlyPercent !== undefined ? { monthlyPercent } : {}),
+    ...(monthlyResetAt !== undefined ? { monthlyResetAt } : {}),
+    ...(weeklyPercent !== undefined ? { weeklyPercent } : {}),
+    ...(weeklyResetAt !== undefined ? { weeklyResetAt } : {}),
+    ...(customWindows.length > 0 ? { customWindows } : {}),
+    updatedAt: now,
+  };
+  return { quota, plan };
+}
+
+function xaiGrokCliHeaders(accessToken: string): Record<string, string> {
+  // Match CPA-Manager-Plus / Grok shell so cli-chat-proxy accepts billing+chat probes.
+  return {
+    Accept: "*/*",
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    "User-Agent": "grok-pager/0.2.101 grok-shell/0.2.101 (macos; aarch64)",
+    "x-grok-client-identifier": "grok-shell",
+    "x-grok-client-version": "0.2.101",
+    "X-XAI-Token-Auth": "xai-grok-cli",
+  };
+}
+
+async function fetchXaiUserProfile(accessToken: string): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch("https://cli-chat-proxy.grok.com/v1/user", {
+      headers: xaiGrokCliHeaders(accessToken),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    return asRecord(await response.json().catch(() => null));
+  } catch {
+    return null;
+  }
+}
+
+/** Minimal chat completion to read x-ratelimit-*-{tokens,requests} (weekly-ish CLI pool). */
+export async function probeXaiRateLimitWindows(accessToken: string): Promise<XaiRateLimitWindows | null> {
+  try {
+    const response = await fetch("https://cli-chat-proxy.grok.com/v1/chat/completions", {
+      method: "POST",
+      headers: xaiGrokCliHeaders(accessToken),
+      body: JSON.stringify({
+        model: "grok-4.5",
+        stream: false,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }),
+      signal: AbortSignal.timeout(18_000),
+    });
+    // Headers are useful even on some non-2xx free-usage errors.
+    const limitTok = toFiniteNumber(response.headers.get("x-ratelimit-limit-tokens"));
+    const remainTok = toFiniteNumber(response.headers.get("x-ratelimit-remaining-tokens"));
+    const limitReq = toFiniteNumber(response.headers.get("x-ratelimit-limit-requests"));
+    const remainReq = toFiniteNumber(response.headers.get("x-ratelimit-remaining-requests"));
+    const tokenUsedPercent = usedPercentFromLimitRemaining(limitTok, remainTok);
+    const requestUsedPercent = usedPercentFromLimitRemaining(limitReq, remainReq);
+    if (
+      tokenUsedPercent === undefined
+      && requestUsedPercent === undefined
+      && limitTok === undefined
+      && limitReq === undefined
+    ) {
+      return null;
+    }
+    return {
+      ...(tokenUsedPercent !== undefined ? { tokenUsedPercent } : {}),
+      ...(requestUsedPercent !== undefined ? { requestUsedPercent } : {}),
+      ...(limitTok !== undefined ? { tokensLimit: limitTok } : {}),
+      ...(remainTok !== undefined ? { tokensRemaining: remainTok } : {}),
+      ...(limitReq !== undefined ? { requestsLimit: limitReq } : {}),
+      ...(remainReq !== undefined ? { requestsRemaining: remainReq } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchXaiJson(url: string, accessToken: string): Promise<unknown | null> {
+  try {
+    const response = await fetch(url, {
+      headers: xaiGrokCliHeaders(accessToken),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    return await response.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchXaiBillingUsage(accessToken: string): Promise<XaiAccountUsage | null> {
+  // CPA / CLIProxyAPI ecosystem: weekly credits + monthly dollars are separate GETs.
+  const [monthlyBilling, creditsBilling, user] = await Promise.all([
+    fetchXaiJson("https://cli-chat-proxy.grok.com/v1/billing", accessToken),
+    fetchXaiJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", accessToken),
+    fetchXaiUserProfile(accessToken),
+  ]);
+  // Rate-limit probe when credits format is missing OR lacks a usable weekly % / product split.
+  // (Some SuperGrok accounts return currentPeriod weekly but omit creditUsagePercent.)
+  let rateLimits: XaiRateLimitWindows | null = null;
+  const creditsConfig = asRecord(asRecord(creditsBilling)?.config);
+  const hasCreditsWeeklyPct = creditsConfig != null && (
+    creditsConfig.creditUsagePercent !== undefined
+    || creditsConfig.credit_usage_percent !== undefined
+    || (Array.isArray(creditsConfig.productUsage) && creditsConfig.productUsage.length > 0)
+    || (Array.isArray(creditsConfig.product_usage) && creditsConfig.product_usage.length > 0)
+  );
+  if (!hasCreditsWeeklyPct) {
+    rateLimits = await probeXaiRateLimitWindows(accessToken);
+  }
+  return parseXaiBillingPayload(monthlyBilling, user, rateLimits, creditsBilling);
+}
+
 async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | null> {
   let accessToken: string;
   try {
@@ -161,25 +428,18 @@ async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | nu
   } catch {
     return null;
   }
-  const response = await fetch("https://cli-chat-proxy.grok.com/v1/billing", {
-    headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
-  const config = asRecord(body?.config);
-  if (!config) return null;
-  const limitCents = centsValue(config.monthlyLimit);
-  const usedCents = centsValue(config.used);
-  if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
-  const percent = normalizePercent((usedCents / limitCents) * 100);
-  if (percent === undefined) return null;
-  const quota: ProviderQuota = {
-    monthlyPercent: percent,
-    monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
-    updatedAt: Date.now(),
-  };
-  return report(provider, "xai:grok-billing", quota);
+  const usage = await fetchXaiBillingUsage(accessToken);
+  if (!usage?.quota) return null;
+  // Seed the active multiauth slot so the account list can reuse this probe.
+  const activeId = getAccountSet("xai")?.activeAccountId;
+  if (activeId) {
+    accountQuotaCache.set(accountCacheKey("xai", activeId), {
+      ts: Date.now(),
+      quota: usage.quota,
+      plan: usage.plan,
+    });
+  }
+  return report(provider, "xai:grok-billing", usage.quota);
 }
 
 function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number } | null {
@@ -279,6 +539,8 @@ const ACCOUNT_QUOTA_TTL_MS = 10 * 60_000;
 type AccountQuotaCacheEntry = {
   ts: number;
   quota: ProviderQuota | null;
+  /** Best-effort plan/tier label (xAI Grok Pro / SuperGrok / Free, …). */
+  plan?: string;
   /** Last probe failed (429 / network / expired login); still may hold last-good quota. */
   unavailable?: true;
 };
@@ -288,13 +550,15 @@ const accountQuotaInflight = new Map<string, Promise<AccountQuotaCacheEntry>>();
 export interface ProviderAccountQuota {
   accountId: string;
   quota: ProviderQuota | null;
+  /** Best-effort plan/tier label when the upstream exposes one (xAI). */
+  plan?: string;
   /** Set when the probe could not reach upstream (expired login, 429, network). */
   unavailable?: true;
 }
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic";
+  return provider === "anthropic" || provider === "xai";
 }
 
 function accountCacheKey(provider: string, accountId: string): string {
@@ -315,13 +579,18 @@ export function setCachedProviderAccountQuotaForTests(
   provider: string,
   accountId: string,
   quota: ProviderQuota | null,
+  plan?: string,
 ): void {
   const key = accountCacheKey(provider, accountId);
-  if (quota === null) {
+  if (quota === null && plan === undefined) {
     accountQuotaCache.delete(key);
     return;
   }
-  accountQuotaCache.set(key, { ts: Date.now(), quota });
+  accountQuotaCache.set(key, {
+    ts: Date.now(),
+    quota,
+    ...(plan !== undefined ? { plan } : {}),
+  });
 }
 
 /** Drop cached per-account rows (all, or just one provider's). */
@@ -377,25 +646,47 @@ async function fetchAccountQuota(
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
       const token = await getTokenForAccountQuotaProbe(provider, accountId);
-      const quota = await fetchAnthropicUsageQuota(token);
+      let quota: ProviderQuota | null = null;
+      let plan: string | undefined;
+      if (provider === "anthropic") {
+        quota = await fetchAnthropicUsageQuota(token);
+      } else if (provider === "xai") {
+        const usage = await fetchXaiBillingUsage(token);
+        quota = usage?.quota ?? null;
+        plan = usage?.plan;
+        // Plan-only rows (Free) still count as a successful probe.
+        if (usage && !quota) {
+          const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota: null, plan: usage.plan };
+          accountQuotaCache.set(key, entry);
+          return entry;
+        }
+      } else {
+        throw new Error(`per-account quota not implemented for ${provider}`);
+      }
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
         // negative-cache instead of re-probing on every GUI poll.
         const entry: AccountQuotaCacheEntry = {
           ts: Date.now(),
           quota: cached?.quota ?? null,
+          ...(cached?.plan ? { plan: cached.plan } : plan ? { plan } : {}),
           unavailable: true,
         };
         accountQuotaCache.set(key, entry);
         return entry;
       }
-      const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota };
+      const entry: AccountQuotaCacheEntry = {
+        ts: Date.now(),
+        quota,
+        ...(plan ? { plan } : cached?.plan ? { plan: cached.plan } : {}),
+      };
       accountQuotaCache.set(key, entry);
       return entry;
     } catch {
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(),
         quota: cached?.quota ?? null,
+        ...(cached?.plan ? { plan: cached.plan } : {}),
         unavailable: true,
       };
       accountQuotaCache.set(key, entry);
@@ -424,6 +715,7 @@ export async function fetchProviderAccountQuotas(
     return {
       accountId: account.id,
       quota: entry.quota,
+      ...(entry.plan ? { plan: entry.plan } : {}),
       ...(entry.unavailable ? { unavailable: true as const } : {}),
     };
   }));

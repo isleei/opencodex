@@ -1055,6 +1055,11 @@ switch (command) {
     process.exitCode = await handleConfigCommand(args.slice(1));
     break;
   }
+  case "sync-cloud": {
+    const { handleSyncCloudCommand } = await import("./sync-cloud");
+    process.exitCode = await handleSyncCloudCommand(args.slice(1));
+    break;
+  }
   case "claude": {
     const { cmdClaude } = await import("./claude");
     // "ocx claude desktop" → write Desktop 3P config

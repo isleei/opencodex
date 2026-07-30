@@ -12,6 +12,10 @@ export interface AccountQuota {
 
 export function isThirtyDayOnlyPlan(plan: string | null | undefined): boolean {
   const normalized = plan?.trim().toLowerCase();
+  if (!normalized) return false;
+  // Codex ChatGPT slugs only. xAI labels ("Free", "Grok Pro", "Grok Build", "SuperGrok")
+  // must keep weekly / product windows — matching "free" alone would strip them.
+  if (normalized.includes("grok") || normalized.includes("supergrok")) return false;
   return normalized === "go" || normalized === "free";
 }
 

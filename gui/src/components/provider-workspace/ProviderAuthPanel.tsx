@@ -204,6 +204,9 @@ export default function ProviderAuthPanel({
                           <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
                         )}
                       </span>
+                      {account.plan && (
+                        <span className="badge badge-green" title={t("pws.accountPlan")}>{account.plan}</span>
+                      )}
                       {healthLabel && (
                         <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
                       )}
@@ -238,10 +241,21 @@ export default function ProviderAuthPanel({
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                     </div>
-                    {(account.quota || account.quotaUnavailable) && (
+                    {(account.quota || account.quotaUnavailable || account.plan) && (
                       <div className="pwi-auth-acct-quota">
                         {account.quota && (
-                          <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
+                          <QuotaBars
+                            quota={account.quota}
+                            plan={account.plan ?? null}
+                            threshold={80}
+                            t={t}
+                            layout="stacked"
+                          />
+                        )}
+                        {!account.quota && account.plan && !account.quotaUnavailable && (
+                          <p className="muted pwi-auth-acct-quota-stale">
+                            {t("pws.accountPlanOnly", { plan: account.plan })}
+                          </p>
                         )}
                         {account.quotaUnavailable && (
                           <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>

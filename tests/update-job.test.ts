@@ -52,7 +52,7 @@ describe("GUI update check", () => {
     expect(result.command).toContain("ocx.mjs update --tag latest");
   });
 
-  test("reports source checkouts as manual-only", () => {
+  test("reports source checkouts as manual-only while still exposing registry version", () => {
     const result = checkForUpdate("latest", {
       currentVersion: () => "2.6.17",
       detectInstall: () => "source",
@@ -61,6 +61,8 @@ describe("GUI update check", () => {
 
     expect(result.canUpdate).toBe(false);
     expect(result.reason).toBe("source_checkout");
+    expect(result.latestVersion).toBe("2.6.18");
+    expect(result.updateAvailable).toBe(true);
     expect(result.command).toBe("git pull && bun install && bun run build:gui");
   });
 

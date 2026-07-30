@@ -963,6 +963,13 @@
   flex-shrink: 0;
 }
 
+.pws-model-chip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
 .pws-inline-error {
   display: flex;
   align-items: center;
