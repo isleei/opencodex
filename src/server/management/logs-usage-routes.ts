@@ -68,9 +68,11 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
+import { addRequestLog, filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import type { PersistedUsageAttempt } from "../../usage/log";
+import type { PersistedUsageAttempt, UsageStatus } from "../../usage/log";
+import { isKnownUsageSurface } from "../../usage/log";
+import type { OcxUsage } from "../../types";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 
@@ -79,6 +81,9 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 
 const USAGE_DAY_MS = 86_400_000;
+/** Max entries accepted in one POST /api/usage/ingest body. */
+const USAGE_INGEST_MAX_BATCH = 50;
+const USAGE_STATUSES = new Set<UsageStatus>(["reported", "unreported", "unsupported", "estimated"]);
 const usageSummaryCache = new Map<string, {
   revisionKey: string;
   expiresAt: number;
@@ -90,6 +95,119 @@ function usageEntryMatchesSurface(entry: PersistedUsageEntry, surface: UsageSurf
   if (surface === "grok") return entry.surface === "grok";
   if (surface === "codex") return entry.surface === undefined;
   return true;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function extractIngestRawEntries(body: unknown): unknown[] | null {
+  if (!isPlainRecord(body)) return null;
+  if (Array.isArray(body.entries)) return body.entries;
+  // Single entry: must look like a usage row (has requestId or model+provider).
+  if (typeof body.requestId === "string" || (typeof body.model === "string" && typeof body.provider === "string")) {
+    return [body];
+  }
+  return null;
+}
+
+function parseIngestUsage(raw: unknown): OcxUsage | undefined {
+  if (!isPlainRecord(raw)) return undefined;
+  if (!isNonNegativeFiniteNumber(raw.inputTokens) || !isNonNegativeFiniteNumber(raw.outputTokens)) {
+    return undefined;
+  }
+  const inputTokens = raw.inputTokens;
+  const outputTokens = raw.outputTokens;
+  const totalTokens = isNonNegativeFiniteNumber(raw.totalTokens)
+    ? raw.totalTokens
+    : inputTokens + outputTokens;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    ...(isNonNegativeFiniteNumber(raw.cachedInputTokens)
+      ? { cachedInputTokens: raw.cachedInputTokens }
+      : {}),
+    ...(isNonNegativeFiniteNumber(raw.cacheReadInputTokens)
+      ? { cacheReadInputTokens: raw.cacheReadInputTokens }
+      : {}),
+    ...(isNonNegativeFiniteNumber(raw.cacheCreationInputTokens)
+      ? { cacheCreationInputTokens: raw.cacheCreationInputTokens }
+      : {}),
+    ...(isNonNegativeFiniteNumber(raw.reasoningOutputTokens)
+      ? { reasoningOutputTokens: raw.reasoningOutputTokens }
+      : {}),
+    ...(raw.estimated === true ? { estimated: true } : {}),
+  };
+}
+
+function parseIngestEntry(
+  raw: unknown,
+  index: number,
+): { ok: true; entry: RequestLogEntry } | { ok: false; error: string } {
+  if (!isPlainRecord(raw)) return { ok: false, error: `entries[${index}] must be an object` };
+
+  const requestId = typeof raw.requestId === "string" ? raw.requestId.trim() : "";
+  if (!requestId || requestId.length > 200) {
+    return { ok: false, error: `entries[${index}].requestId is required (≤200 chars)` };
+  }
+  const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  if (!provider || provider.length > 128) {
+    return { ok: false, error: `entries[${index}].provider is required (≤128 chars)` };
+  }
+  if (!model || model.length > 256) {
+    return { ok: false, error: `entries[${index}].model is required (≤256 chars)` };
+  }
+
+  const status = isNonNegativeFiniteNumber(raw.status) ? Math.trunc(raw.status) : 200;
+  if (status < 0 || status > 599) {
+    return { ok: false, error: `entries[${index}].status must be 0–599` };
+  }
+  const durationMs = isNonNegativeFiniteNumber(raw.durationMs) ? raw.durationMs : 0;
+  const timestamp = isNonNegativeFiniteNumber(raw.timestamp) ? raw.timestamp : Date.now();
+
+  const usageStatusRaw = typeof raw.usageStatus === "string" ? raw.usageStatus : "reported";
+  if (!USAGE_STATUSES.has(usageStatusRaw as UsageStatus)) {
+    return { ok: false, error: `entries[${index}].usageStatus is invalid` };
+  }
+  const usageStatus = usageStatusRaw as UsageStatus;
+  const usage = parseIngestUsage(raw.usage);
+  if (raw.usage !== undefined && usage === undefined) {
+    return { ok: false, error: `entries[${index}].usage is invalid` };
+  }
+
+  const totalTokens = isNonNegativeFiniteNumber(raw.totalTokens)
+    ? raw.totalTokens
+    : usage?.totalTokens;
+
+  const surface = isKnownUsageSurface(raw.surface) ? raw.surface : undefined;
+  const conversationId = typeof raw.conversationId === "string" && raw.conversationId.length <= 128
+    ? raw.conversationId
+    : undefined;
+  const requestedModel = typeof raw.requestedModel === "string" && raw.requestedModel.length <= 256
+    ? raw.requestedModel
+    : undefined;
+  const resolvedModel = typeof raw.resolvedModel === "string" && raw.resolvedModel.length <= 256
+    ? raw.resolvedModel
+    : undefined;
+
+  const entry: RequestLogEntry = {
+    requestId,
+    timestamp,
+    provider,
+    model,
+    status,
+    durationMs,
+    usageStatus,
+    ...(surface ? { surface } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(requestedModel ? { requestedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(usage ? { usage } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+  return { ok: true, entry };
 }
 
 function nextLocalMidnight(now: number): number {
@@ -230,6 +348,77 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         error: "read_failed",
       });
     }
+  }
+
+  /**
+   * External usage ingest (Grok Build hooks, sidecars).
+   * Accepts one entry or `{ entries: [...] }`, persists to usage.jsonl, and pushes into the
+   * live Logs ring so the dashboard "Logs / calls" view updates without a process restart.
+   * Requires management auth (same as other /api/* routes).
+   */
+  if (url.pathname === "/api/usage/ingest" && req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    const rawEntries = extractIngestRawEntries(body);
+    if (!rawEntries) {
+      return jsonResponse({
+        error: "expected an entry object or { entries: [...] }",
+      }, 400);
+    }
+    if (rawEntries.length === 0) {
+      return jsonResponse({ error: "entries must not be empty" }, 400);
+    }
+    if (rawEntries.length > USAGE_INGEST_MAX_BATCH) {
+      return jsonResponse({
+        error: `at most ${USAGE_INGEST_MAX_BATCH} entries per request`,
+      }, 400);
+    }
+
+    const accepted: string[] = [];
+    const skipped: string[] = [];
+    const rejected: Array<{ index: number; error: string }> = [];
+    const knownIds = new Set(getRequestLogEntries().map(entry => entry.requestId));
+
+    for (let index = 0; index < rawEntries.length; index += 1) {
+      const parsed = parseIngestEntry(rawEntries[index], index);
+      if (!parsed.ok) {
+        rejected.push({ index, error: parsed.error });
+        continue;
+      }
+      if (knownIds.has(parsed.entry.requestId)) {
+        skipped.push(parsed.entry.requestId);
+        continue;
+      }
+      try {
+        addRequestLog(parsed.entry);
+        knownIds.add(parsed.entry.requestId);
+        accepted.push(parsed.entry.requestId);
+      } catch (error) {
+        rejected.push({
+          index,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Invalidate usage summary cache so the next GET /api/usage reflects new rows.
+    usageSummaryCache.clear();
+
+    const status = accepted.length > 0 || skipped.length > 0
+      ? (rejected.length > 0 ? 207 : 200)
+      : 400;
+    return jsonResponse({
+      accepted: accepted.length,
+      skipped: skipped.length,
+      rejected: rejected.length,
+      requestIds: accepted,
+      skippedIds: skipped,
+      errors: rejected,
+    }, status);
   }
 
   if (url.pathname === "/api/storage" && req.method === "GET") {
