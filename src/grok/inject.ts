@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import { applyEol, dominantEol, isLoopbackHostname, providerBaseHost } from "../codex/inject";
+import { stripGrokUsageHooks } from "./usage-hook";
 
 export interface GrokInjectModel {
   id: string;
@@ -447,6 +448,31 @@ export function injectGrokConfig(
 }
 
 export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectResult {
+  // Fence teardown (model block in config.toml).
+  const fence = stripGrokConfigFence(opts);
+  // Usage-hook teardown (hooks/opencodex-usage*). Independent of the fence so a missing
+  // config.toml still cleans managed hooks; best-effort so a hook failure never blocks stop.
+  let hooks: { ok: boolean; changed: boolean; message: string };
+  try {
+    hooks = stripGrokUsageHooks(opts);
+  } catch (error) {
+    hooks = {
+      ok: false,
+      changed: false,
+      message: `Grok usage hook cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!hooks.changed && hooks.ok) return fence;
+  const parts = [fence.message, hooks.message].filter(Boolean);
+  return {
+    ok: fence.ok && hooks.ok,
+    changed: fence.changed || hooks.changed,
+    message: parts.join(" "),
+    ...(fence.skippedReason ? { skippedReason: fence.skippedReason } : {}),
+  };
+}
+
+function stripGrokConfigFence(opts: { grokHome?: string } = {}): GrokInjectResult {
   const grokHome = resolveGrokHome(opts.grokHome);
   if (!isDirectory(grokHome)) {
     return {

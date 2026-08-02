@@ -9,10 +9,12 @@
 import { visibleNativeSlugs, filterCatalogVisibleModels, nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
 import type { OcxConfig } from "../types";
 import { injectGrokConfig, type GrokInjectModel, type GrokInjectResult } from "./inject";
+import { installGrokUsageHooks, type GrokUsageHookResult } from "./usage-hook";
 
 export interface GrokSyncDeps {
   fetchAllModels: (config: OcxConfig) => Promise<CatalogModel[]>;
   injectGrokConfig: typeof injectGrokConfig;
+  installGrokUsageHooks?: (opts?: { grokHome?: string }) => GrokUsageHookResult;
 }
 
 async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
@@ -49,18 +51,53 @@ export async function syncGrokConfig(
       })),
     ];
   } catch (err) {
+    // Still try to install the usage hook — native-session reporting does not need the catalog.
+    const hookResult = runInstallHooks(deps, opts);
     return {
       ok: false,
-      changed: false,
-      message: `Grok config sync skipped: model catalog unavailable (${err instanceof Error ? err.message : String(err)})`,
+      changed: hookResult.changed,
+      message: [
+        `Grok config sync skipped: model catalog unavailable (${err instanceof Error ? err.message : String(err)})`,
+        hookResult.message,
+      ].filter(Boolean).join(" "),
     };
   }
   // Pass the FULL list plus the exclusion set: the writer allocates aliases over
   // everything and emits only what is switched on, so a model's alias never depends on
   // its neighbours' switches. Absent/empty selection keeps today's behaviour exactly.
-  return deps.injectGrokConfig(port, models, {
+  const injectResult = deps.injectGrokConfig(port, models, {
     ...(opts.hostname !== undefined ? { hostname: opts.hostname } : {}),
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
     excluded: new Set(config.grokExcludedModels ?? []),
   });
+
+  // Always (re)install the native-usage hook when a Grok home exists — independent of the
+  // model fence (which is skipped on non-loopback binds). Best-effort; never fails the fence.
+  const hookResult = runInstallHooks(deps, opts);
+
+  if (!hookResult.changed && hookResult.ok) return injectResult;
+  const parts = [injectResult.message, hookResult.message].filter(Boolean);
+  return {
+    ok: injectResult.ok && hookResult.ok,
+    changed: injectResult.changed || hookResult.changed,
+    message: parts.join(" "),
+    ...(injectResult.skippedReason ? { skippedReason: injectResult.skippedReason } : {}),
+  };
+}
+
+function runInstallHooks(
+  deps: GrokSyncDeps,
+  opts: { grokHome?: string },
+): GrokUsageHookResult {
+  const installHooks = deps.installGrokUsageHooks ?? installGrokUsageHooks;
+  try {
+    return installHooks(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {});
+  } catch (err) {
+    return {
+      ok: false,
+      changed: false,
+      message: `Grok usage hook install failed: ${err instanceof Error ? err.message : String(err)}`,
+      homes: [],
+    };
+  }
 }

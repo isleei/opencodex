@@ -90,8 +90,10 @@ describe("syncGrokConfig", () => {
         fetchAllModels: async () => [],
         injectGrokConfig,
       });
-      expect(wildcard).toMatchObject({ ok: true, changed: false, skippedReason: "non-loopback" });
+      // Model fence is skipped on non-loopback, but the native usage hook still installs.
+      expect(wildcard).toMatchObject({ ok: true, skippedReason: "non-loopback" });
       expect(existsSync(join(grokHome, "config.toml"))).toBe(false);
+      expect(existsSync(join(grokHome, "hooks", "opencodex-usage.json"))).toBe(true);
 
       const loopback = await syncGrokConfig(10100, baseConfig, { grokHome, hostname: "::1" }, {
         fetchAllModels: async () => [],
@@ -113,9 +115,10 @@ describe("syncGrokConfig", () => {
         injectGrokConfig,
       });
       expect(result.ok).toBe(false);
-      expect(result.changed).toBe(false);
       expect(result.message).toContain("proxy down");
+      // Fence is not written, but the usage hook still installs (does not need the catalog).
       expect(() => readFileSync(join(grokHome, "config.toml"), "utf8")).toThrow();
+      expect(existsSync(join(grokHome, "hooks", "opencodex-usage.json"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
