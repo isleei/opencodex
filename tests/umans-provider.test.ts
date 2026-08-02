@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey, type KeyLoginProvider } from "../src/oauth/key-providers";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
 function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
   return {
@@ -214,7 +218,7 @@ describe("Umans provider", () => {
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
 
-    const valid = await validateApiKey(KEY_LOGIN_PROVIDERS.umans, "sk-umans-valid");
+    const valid = await validateApiKey("umans", KEY_LOGIN_PROVIDERS.umans, "sk-umans-valid");
     const headers = new Headers(seenInit?.headers);
     const body = JSON.parse(String(seenInit?.body)) as Record<string, unknown>;
 
@@ -235,7 +239,7 @@ describe("Umans provider", () => {
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
 
-    const valid = await validateApiKey({
+    const valid = await validateApiKey("umans", {
       ...KEY_LOGIN_PROVIDERS.umans,
       apiKeyTransport: "bearer",
     }, "sk-umans-valid");

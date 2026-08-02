@@ -26,6 +26,8 @@ import {
   formatProviderDisplayName,
   isCatalogProviderId,
 } from "../gui/src/provider-icons";
+import { en } from "../gui/src/i18n/en";
+import { interpolate, type TFn } from "../gui/src/i18n/shared";
 import {
   bucketPresets,
   filterPresets,
@@ -33,6 +35,8 @@ import {
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
+
+const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
 /** Base defaults matching a minimal, unconfigured provider value. */
 function prov(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvider {
@@ -55,15 +59,16 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
-  test("demotes ready provider when active account needs reauth", () => {
+  test("tags ready provider when active account needs reauth without moving sections", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),
       keyed: prov({ authMode: "key", hasApiKey: true }),
     });
     expect(sections.ready.map(p => p.name)).toContain("anthropic");
     const next = applyActiveAccountReauth(sections, { anthropic: true });
-    expect(next.ready.map(p => p.name)).not.toContain("anthropic");
-    expect(next.needsSetup.map(p => p.name)).toContain("anthropic");
+    expect(next.ready.map(p => p.name)).toContain("anthropic");
+    expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+    expect(next.ready.find(p => p.name === "anthropic")?.activeNeedsReauth).toBe(true);
     expect(next.ready.map(p => p.name)).toContain("keyed");
   });
 
@@ -74,6 +79,7 @@ describe("applyActiveAccountReauth", () => {
     const next = applyActiveAccountReauth(sections, { anthropic: false });
     expect(next.ready.map(p => p.name)).toContain("anthropic");
     expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+    expect(next.ready.find(p => p.name === "anthropic")?.activeNeedsReauth).toBeUndefined();
   });
 
   test("does not move disabled providers", () => {
@@ -85,14 +91,14 @@ describe("applyActiveAccountReauth", () => {
     expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
   });
 
-  test("demoted items carry activeNeedsReauth and binProviderStatus is needs-setup", () => {
+  test("tagged ready items keep section membership; binProviderStatus is needs-setup", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),
     });
     const next = applyActiveAccountReauth(sections, { anthropic: true });
-    const demoted = next.needsSetup.find(p => p.name === "anthropic");
-    expect(demoted?.activeNeedsReauth).toBe(true);
-    expect(binProviderStatus(demoted!)).toBe("needs-setup");
+    const tagged = next.ready.find(p => p.name === "anthropic");
+    expect(tagged?.activeNeedsReauth).toBe(true);
+    expect(binProviderStatus(tagged!)).toBe("needs-setup");
     expect(binProviderStatus(prov({ authMode: "oauth" }))).toBe("ready");
   });
 });
@@ -340,8 +346,8 @@ describe("usage: most-used and attention", () => {
     const sections = applyActiveAccountReauth(base, { anthropic: true });
     const items = buildAttentionItems(sections, {});
     expect(items).toEqual([
-      { name: "missing", reason: "Missing credentials" },
       { name: "anthropic", reason: "Active account needs re-authentication" },
+      { name: "missing", reason: "Missing credentials" },
     ]);
   });
 });
@@ -436,14 +442,14 @@ describe("usage: count formatting", () => {
 
 describe("provider-icons", () => {
   test("single OpenAI provider display names match the registry", () => {
-    expect(formatProviderDisplayName("openai")).toBe("OpenAI (Codex login)");
-    expect(formatProviderDisplayName("openai-apikey")).toBe("OpenAI API");
-    expect(formatProviderDisplayName("chatgpt")).toBe("ChatGPT");
+    expect(formatProviderDisplayName("openai", englishT)).toBe("OpenAI (Codex login)");
+    expect(formatProviderDisplayName("openai-apikey", englishT)).toBe("OpenAI API");
+    expect(formatProviderDisplayName("chatgpt", englishT)).toBe("ChatGPT");
   });
 
   test("unknown simple ids are title-cased; mixedCase custom names pass through", () => {
-    expect(formatProviderDisplayName("my-proxy")).toBe("My Proxy");
-    expect(formatProviderDisplayName("MyProxy")).toBe("MyProxy");
+    expect(formatProviderDisplayName("my-proxy", englishT)).toBe("My Proxy");
+    expect(formatProviderDisplayName("MyProxy", englishT)).toBe("MyProxy");
   });
 
   test("catalog membership excludes legacy Multi and custom ids", () => {

@@ -121,7 +121,7 @@ describe("GUI update execution decisions", () => {
   test("restart waits on the captured pre-update port unconditionally and pins the spawn to it", async () => {
     // The stop-first update flow clears pid/runtime state before restartAfterUpdate runs,
     // so the wait must fire even with no readable pid — driven here via the io seam.
-    const waited: Array<{ port: number; hostname: string; opts?: { killOcxHolders?: boolean; onlyKillPids?: number[] } }> = [];
+    const waited: Array<{ port: number; hostname: string; opts?: { killOcxHolders?: boolean; onlyKillPids?: number[]; killAllOcxOnPort?: boolean } }> = [];
     const spawned: Array<{ port?: number }> = [];
     const job: UpdateJobState = {
       id: "restart-io",
@@ -139,6 +139,7 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 12345, hostname: "127.0.0.1" }, {
       serviceInstalledFn: () => false, // drive the proxy-mode branch regardless of host state
+      listListenPidsFn: () => [],
       waitForPort: async (port, hostname, opts) => {
         waited.push({
           port,
@@ -146,6 +147,7 @@ describe("GUI update execution decisions", () => {
           opts: {
             killOcxHolders: opts?.killOcxHolders,
             onlyKillPids: opts?.onlyKillPids,
+            killAllOcxOnPort: (opts as { killAllOcxOnPort?: boolean } | undefined)?.killAllOcxOnPort,
           },
         });
         return true;
@@ -157,13 +159,13 @@ describe("GUI update execution decisions", () => {
     expect(waited).toEqual([{
       port: 12345,
       hostname: "127.0.0.1",
-      opts: { killOcxHolders: false, onlyKillPids: [] },
+      opts: { killOcxHolders: true, onlyKillPids: [], killAllOcxOnPort: true },
     }]);
     expect(spawned).toEqual([{ port: 12345 }]);
   });
 
-  test("restart reclaim allowlists only the trusted oldPid", async () => {
-    const optsSeen: Array<{ killOcxHolders?: boolean; onlyKillPids?: number[] }> = [];
+  test("restart reclaim allowlists the trusted oldPid and kills any ocx on the port", async () => {
+    const optsSeen: Array<{ killOcxHolders?: boolean; onlyKillPids?: number[]; killAllOcxOnPort?: boolean }> = [];
     const job: UpdateJobState = {
       id: "restart-oldpid",
       status: "restarting",
@@ -180,19 +182,51 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 4242 }, {
       serviceInstalledFn: () => false,
+      listListenPidsFn: () => [],
       waitForPort: async (_port, _hostname, opts) => {
         optsSeen.push({
           killOcxHolders: opts?.killOcxHolders,
           onlyKillPids: opts?.onlyKillPids,
+          killAllOcxOnPort: (opts as { killAllOcxOnPort?: boolean } | undefined)?.killAllOcxOnPort,
         });
         return true;
       },
       spawnStart: () => {},
     });
-    expect(optsSeen).toEqual([{ killOcxHolders: true, onlyKillPids: [4242] }]);
+    expect(optsSeen).toEqual([{ killOcxHolders: true, onlyKillPids: [4242], killAllOcxOnPort: true }]);
   });
 
-  test("restart refuses to spawn when the captured port never becomes free", async () => {
+  test("restart reclaim also allowlists leftover ocx listeners on the captured port", async () => {
+    const optsSeen: number[][] = [];
+    const job: UpdateJobState = {
+      id: "restart-leftover-ocx",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.39",
+      latestVersion: "2.7.40",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1", oldPid: 100 }, {
+      serviceInstalledFn: () => false,
+      // Simulate a respawned bun child that is not the pre-update PID.
+      listListenPidsFn: () => [100, 200],
+      verifyOcxFn: (pid) => (pid === 100 || pid === 200 ? pid : null),
+      waitForPort: async (_port, _hostname, opts) => {
+        optsSeen.push([...(opts?.onlyKillPids ?? [])].sort((a, b) => a - b));
+        return true;
+      },
+      spawnStart: () => {},
+    });
+    expect(optsSeen).toEqual([[100, 200]]);
+  });
+
+  test("restart refuses to spawn when a live holder still owns the captured port", async () => {
     const spawned: Array<{ port?: number }> = [];
     const job: UpdateJobState = {
       id: "restart-busy",
@@ -208,16 +242,47 @@ describe("GUI update execution decisions", () => {
       log: [],
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
-    await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1" }, {
+    await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 100 }, {
       serviceInstalledFn: () => false,
       waitForPort: async () => false,
+      listListenPidsFn: () => [555],
+      isAliveFn: pid => pid === 555,
       spawnStart: (_job, _installer, port) => {
         spawned.push({ port });
       },
     });
     expect(spawned).toEqual([]);
     const saved = readUpdateJob(job.id);
-    expect(saved?.log.some(line => line.includes("still busy") && line.includes("not starting on another port"))).toBe(true);
+    expect(saved?.log.some(line => line.includes("Live holder(s) remain"))).toBe(true);
+  });
+
+  test("restart attempts pinned start when reclaim times out with only dead holders", async () => {
+    const spawned: Array<{ port?: number }> = [];
+    const job: UpdateJobState = {
+      id: "restart-busy-dead",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.39",
+      latestVersion: "2.7.40",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 100 }, {
+      serviceInstalledFn: () => false,
+      waitForPort: async () => false,
+      listListenPidsFn: () => [100],
+      isAliveFn: () => false,
+      spawnStart: (_job, _installer, port) => {
+        spawned.push({ port });
+      },
+    });
+    expect(spawned).toEqual([{ port: 10100 }]);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("waiting for ghost LISTEN rows to clear before pinned start"))).toBe(true);
   });
 
   test("service restart waits on the captured port and clears OCX_BAKE_PORT after install", async () => {
@@ -242,6 +307,7 @@ describe("GUI update execution decisions", () => {
     try {
       await restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
         serviceInstalledFn: () => true,
+        serviceViableFn: () => true,
         waitForPort: async (port, hostname) => {
           waited.push({ port, hostname: hostname ?? "" });
           expect(process.env.OCX_BAKE_PORT).toBeUndefined();
@@ -277,16 +343,104 @@ describe("GUI update execution decisions", () => {
       log: [],
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
-    await restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
-      serviceInstalledFn: () => true,
-      waitForPort: async () => true,
-      runService: () => ({ status: 1 }),
-      spawnStart: (_job, _installer, port) => {
-        spawned.push({ port: port ?? 0 });
+    const prevService = process.env.OCX_SERVICE;
+    delete process.env.OCX_SERVICE;
+    try {
+      await restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        serviceViableFn: () => false,
+        waitForPort: async () => true,
+        runService: () => ({ status: 1 }),
+        spawnStart: (_job, _installer, port) => {
+          spawned.push({ port: port ?? 0 });
+        },
+      });
+      // The fallback must fire: direct proxy start instead of throwing.
+      expect(spawned).toEqual([{ port: 19999 }]);
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+  });
+
+  test("service reinstall exit 0 with non-viable assets falls back to direct start", async () => {
+    const spawned: Array<{ port: number }> = [];
+    const job: UpdateJobState = {
+      id: "svc-stale-fallback",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const prevService = process.env.OCX_SERVICE;
+    delete process.env.OCX_SERVICE;
+    try {
+      await restartAfterUpdateForTests(job, { port: 19100, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        // Installed but stale/missing assets — the status line users see after a dead update.
+        serviceViableFn: () => false,
+        waitForPort: async () => true,
+        runService: () => ({ status: 0 }),
+        spawnStart: (_job, _installer, port) => {
+          spawned.push({ port: port ?? 0 });
+        },
+      });
+      expect(spawned).toEqual([{ port: 19100 }]);
+      expect(readUpdateJob(job.id)?.log.some(line =>
+        line.includes("not viable") && line.includes("direct proxy start"),
+      )).toBe(true);
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+  });
+
+  test("dashboard update recovery does not require a Background Service", async () => {
+    let now = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "no-bg-service-recovery",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const ok = await finishGuiUpdateRestart(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 501 },
+      "npm",
+      {
+        // No Background Service installed — interactive dashboard update must still recover.
+        serviceInstalledFn: () => false,
+        serviceViableFn: () => false,
+        waitForPort: async () => true,
+        spawnStart: () => { restartCalls += 1; },
+        probeProxy: async () => restartCalls > 0,
+        probeProxyIdentity: async () => (
+          restartCalls > 0 ? { pid: 777, version: "2.7.43" } : null
+        ),
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
       },
-    });
-    // The fallback must fire: direct proxy start instead of throwing.
-    expect(spawned).toEqual([{ port: 19999 }]);
+    );
+    expect(ok).toBe(true);
+    expect(restartCalls).toBe(1);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("skipping redundant restart"))).toBe(false);
   });
 
   test("restart confirmation fails when the proxy never becomes healthy", async () => {
@@ -373,6 +527,87 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("stayed healthy for 15s after restart"))).toBe(true);
   });
 
+  test("restart confirmation makes a final health probe at the arrival deadline", async () => {
+    let now = 0;
+    const job: UpdateJobState = {
+      id: "restart-health-deadline",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    const ok = await confirmRestartAfterUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1" },
+      {
+        probeProxy: async () => now >= 30_000,
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(now).toBe(45_000);
+  });
+
+  test("npm finish accepts a replacement that becomes healthy after the old cutoff", async () => {
+    let now = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "npm-late-self-restart",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    const ok = await finishGuiUpdateRestart(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      "npm",
+      {
+        serviceInstalledFn: () => true,
+        // Soft-probe path only runs when a live listen owner exists.
+        listListenPidsFn: () => [222],
+        isAliveFn: () => true,
+        probeProxy: async () => now >= 15_250,
+        probeProxyIdentity: async () => (
+          now >= 15_250 ? { pid: 222, version: "2.7.43" } : null
+        ),
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(restartCalls).toBe(0);
+    expect(now).toBe(30_250);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("stayed healthy for 15s after restart"),
+    )).toBe(true);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("skipping redundant restart") && line.includes("pid changed"),
+    )).toBe(true);
+  });
+
   test("npm finish skips redundant restart when service self-update left a replaced healthy proxy", async () => {
     let now = 0;
     let restartCalls = 0;
@@ -397,6 +632,8 @@ describe("GUI update execution decisions", () => {
       "npm",
       {
         serviceInstalledFn: () => true,
+        listListenPidsFn: () => [222],
+        isAliveFn: () => true,
         probeProxy: async () => true,
         probeProxyIdentity: async () => ({ pid: 222, version: "2.7.41" }),
         now: () => now,
@@ -435,6 +672,8 @@ describe("GUI update execution decisions", () => {
       "npm",
       {
         serviceInstalledFn: () => true,
+        listListenPidsFn: () => [111],
+        isAliveFn: pid => pid === 111,
         // Soft probe stays healthy (old process). Explicit restart is a no-op.
         probeProxy: async () => true,
         probeProxyIdentity: async () => ({ pid: 111, version: "2.7.40" }),
@@ -484,6 +723,8 @@ describe("GUI update execution decisions", () => {
       "npm",
       {
         serviceInstalledFn: () => true,
+        listListenPidsFn: () => [livePid],
+        isAliveFn: () => true,
         probeProxy: async () => true,
         probeProxyIdentity: async () => ({ pid: livePid, version: liveVersion }),
         now: () => now,
@@ -504,7 +745,7 @@ describe("GUI update execution decisions", () => {
     )).toBe(true);
   });
 
-  test("npm finish fails when port reclaim leaves the pre-update proxy healthy", async () => {
+  test("npm finish fails when port reclaim leaves a live pre-update holder", async () => {
     let now = 0;
     const job: UpdateJobState = {
       id: "npm-reclaim-stale",
@@ -526,11 +767,13 @@ describe("GUI update execution decisions", () => {
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
       "npm",
       {
-        // Direct path: reclaim failure returns without spawning a replacement.
+        // Live holder after reclaim timeout — must not spawn a second listener.
         serviceInstalledFn: () => false,
         waitForPort: async () => false,
+        listListenPidsFn: () => [111],
+        isAliveFn: pid => pid === 111,
         spawnStart: () => {
-          throw new Error("must not spawn when reclaim failed");
+          throw new Error("must not spawn when a live holder remains");
         },
         probeProxy: async () => true,
         probeProxyIdentity: async () => ({ pid: 111, version: "2.7.40" }),
@@ -543,10 +786,7 @@ describe("GUI update execution decisions", () => {
       status: "failed",
       restarted: false,
     });
-    expect(readUpdateJob(job.id)?.error).toContain("still the pre-update PID");
-    expect(readUpdateJob(job.id)?.log.some(line =>
-      line.includes("still busy") && line.includes("not starting on another port"),
-    )).toBe(true);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("Live holder(s) remain"))).toBe(true);
   });
 
   test("npm finish skips the soft probe for direct installs and restarts immediately", async () => {
@@ -613,6 +853,7 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "npm", {
       serviceInstalledFn: () => true,
+      listListenPidsFn: () => [],
       // Soft probe times out (proxy down after npm update); confirm after explicit restart succeeds.
       probeProxy: async () => restartCalls > 0,
       probeProxyIdentity: async () => (
@@ -630,6 +871,39 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line =>
       line.includes("performing explicit restart"),
     )).toBe(true);
+  });
+
+  test("npm finish probes /healthz when listener scan fails instead of assuming no listener", async () => {
+    let now = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "npm-scan-fail-probe",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1", oldPid: 111 }, "npm", {
+      serviceInstalledFn: () => true,
+      scanListenPidsFn: () => ({ ok: false, error: "lsof/netstat unavailable" }),
+      probeProxy: async () => true,
+      probeProxyIdentity: async () => ({ pid: 222, version: "2.7.41" }),
+      now: () => now,
+      sleepMs: async (ms) => { now += ms; },
+      restartAfterUpdateFn: async () => { restartCalls += 1; },
+    });
+    expect(ok).toBe(true);
+    expect(restartCalls).toBe(0);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("Listener scan inconclusive"))).toBe(true);
+    expect(readUpdateJob(job.id)?.log.some(line => line.includes("skipping redundant restart"))).toBe(true);
   });
 
   test("bun finish always runs explicit restart even if a proxy is already healthy", async () => {

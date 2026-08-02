@@ -168,12 +168,22 @@ ocx v2 threads 16
 既存の `config.toml` をそのまま復元します。
 変更は新しい Codex セッションから適用され、実行中のセッションは固定された surface を維持します。
 
-### `ocx models [--provider <name>] [--json]`
+### `ocx models [subcommand]`
 
-設定されたプロバイダーに静的に seed されたモデルを一覧します。`--provider` は 1 つのプロバイダーだけを選び、
-`--json` はモデルメタデータとともに `liveModels` がランタイム専用項目を追加できる旨の案内を
-返します。リアルタイムカタログを取得するコマンドではありません。その作業には `ocx sync` やダッシュボードを
-使ってください。
+サブコマンドなしでは、設定されたプロバイダーに静的に seed されたモデルを一覧します。`--provider` は
+1 つのプロバイダーだけを選び、`--json` はモデルメタデータを返します。実行中のカタログは
+`ocx models live` で読み取ります。
+
+ダッシュボードが提供するモデル単位の操作はすべて CLI にあります。`add`、`remove`、`list-custom` は
+設定ファイルを対象とし、実行中のプロキシにはカタログ同期で反映されます。それ以外は実行中の管理 API を
+使うため、プロキシが起動している必要があります（`ocx start` またはインストール済みサービス）。
+
+サブコマンド: `list`、`live`、`add`、`edit`、`remove`、`list-custom`、`enable`、`disable`、
+`provider <name> <on|off>`、`selected <provider>`、`context`、`shadow`。フラグと例の完全な一覧は
+英語版リファレンスを参照してください。
+
+`--modalities` は `text`、`image`、`audio` のみを受け付けます。Codex はこのフィールドを閉じた enum
+として解析し、それ以外の値が 1 つでもあると**カタログ全体を拒否**します（#759）。
 
 ### `ocx provider <subcommand>`
 
@@ -311,6 +321,56 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 `--json` は `{ ok: true, id: string | null, label?: string }` を返し key を含みません。
 
+### `ocx export --client <opencode|pi>`
+
+実行中のプロキシに接続されたクライアント設定を出力します。opencode と Pi は環境変数ではなく自分の
+JSON 設定ファイルからプロバイダーを読むため、このコマンドが `opencodex` プロバイダーブロック
+(base URL、モデル一覧、クライアントが解釈する環境変数参照) を直列化します。自分のファイルへの
+マージはユーザーが行います。
+
+プロキシが動いている必要があります。実行中のポートを解決して `/api/models` を読み、今 Codex から
+見えるモデルだけを出力します。
+
+| フラグ | 動作 |
+| --- | --- |
+| `--client <opencode\|pi>` | 必須。クライアント方言を選びます。opencode は key 付き `provider` オブジェクト、Pi は `providers` 配列です。 |
+| `--json` | stdout に設定 JSON だけを出力するので、リダイレクトしてもバイト単位で正確です。`--out` の書き込み通知を含むすべての診断は stderr に出ます。 |
+| `--out <path>` | 設定を `<path>` に書きます。既存ファイルの置き換えは拒否します。 |
+| `--force` | `--out` が既存ファイルを置き換えることを許可します。 |
+
+```bash
+ocx export --client opencode                     # 設定に加えて宛先パス、マージ警告、件数
+ocx export --client pi --json > pi-models.json   # パイプや diff 用のバイト正確な JSON
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+`--json` なしでは JSON が先に出て、続いて正規の宛先パス、マージ警告、環境変数の export 行、モデル
+件数とコンテキスト上限を持たない行数 (それらはクライアント側の既定値が使われます) が出力されます。
+
+| クライアント | 正規の宛先 | ダウンロードファイル名 | 環境変数 |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` が設定されていればそちら) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+
+2 つの環境変数名は異なり、各クライアントは自分のものだけを解釈します。opencode は
+`{env:OPENCODEX_OPENCODE_API_KEY}`、Pi は `$OPENCODEX_API_KEY` を読みます。
+
+:::caution[置き換えではなくマージ]
+`ocx export` が実際のクライアント設定ファイルを書くことはありません。宛先パスは手動でマージする
+ために表示され、`--out` も `--force` なしでは既存ファイルを上書きしません。設定ファイルを丸ごと
+置き換えると、そこにあった他のプロバイダー、エージェント、MCP エントリが失われるからです。
+:::
+
+key が直列化されることはありません。設定にはクライアントの環境変数参照だけが入り、secret は環境に
+残ります。ループバックのプロキシ (既定の `127.0.0.1`) では admission key 自体が不要で、参照は使わ
+れません。プロキシをループバック外にバインドするときだけ変数を設定してください。admission key の
+発行方法は [リモートアクセス](/ja/reference/configuration/#リモートアクセス) を参照してください。
+上流プロバイダーの key はまったく別物で、[プロバイダー](/ja/guides/providers/) で設定します。Pi
+ガイドは英語のみです: [Pi](/guides/pi/)。
+
+同じペイロードを `GET /api/client-config` が返し、ダッシュボードの API タブが描画するので、CLI と
+API と GUI が異なるバイトを見せることはありません。
+
 ## 認証
 
 ### `ocx login <provider>`
@@ -359,6 +419,10 @@ ocx service install
 ocx service status
 ocx service uninstall
 ```
+
+Windows では、`ocx service status` はタスク スケジューラの登録状態と、ID を確認済みの
+OpenCodex プロキシへの到達性を別々に報告します。ローカライズされた `schtasks` の表は出力
+しないため、Windows のコード ページに関係なく概要を読めます。
 
 Windows でタスク スケジューラのエントリを作成するには昇格が必要です。認識できるローカライズ
 済みのアクセス拒否テキストは、既存の案内経路をそのまま使用します。そのテキストが読めない場合、

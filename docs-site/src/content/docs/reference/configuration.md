@@ -65,6 +65,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `accountPoolStickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache (5 min). |
+| `appOwnedMemoryBudgetMb?` | `number` | `256` | Process-wide cap in MiB for evictable app-owned retained state (logs, caches, blobs, and continuation payloads), valid from 64 to 4096. This does not cap RSS or native runtime memory. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | Web-search sidecar options (see below). |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | Vision sidecar options (see below). |
@@ -252,9 +253,22 @@ systemd, or Task Scheduler receives it. Clients must include the token in every 
 x-opencodex-api-key: your-secret-token
 ```
 
-An `Authorization: Bearer …` header is also accepted. Dashboard-generated `apiKeys` may be used in
-place of the environment token after startup; all candidates are compared in constant time
-(`timingSafeEqual`) to prevent timing side-channels.
+Which headers work depends on the endpoint, so `x-opencodex-api-key` is the one that always does:
+
+| Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | not accepted | **required** | not accepted |
+| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/messages` | accepted | accepted | accepted |
+| `/v1/models` | accepted | accepted | accepted |
+
+Responses and Chat Completions accept only the dedicated header because `Authorization` on those
+transports may belong to Codex Direct passthrough, and the two bearer domains must not be
+confusable. The API tab in the dashboard renders this same table from the server, so it cannot
+drift from the code.
+
+Dashboard-generated `apiKeys` may be used in place of the environment token after startup; all
+candidates are compared in constant time (`timingSafeEqual`) to prevent timing side-channels.
 
 :::caution[LAN exposure]
 Binding to `0.0.0.0` exposes your proxy — and all configured provider credentials — to the local
@@ -299,7 +313,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
-| `baseUrl` | `string` | Upstream API base URL. Built-in providers with a fixed endpoint ignore it — see [Fixed provider endpoints](#fixed-provider-endpoints). |
+| `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; newly promoted collision-safe key presets preserve an older same-named custom destination. See [Fixed provider endpoints](#fixed-provider-endpoints). |
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
@@ -307,7 +321,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. When `liveModels` is `false`, these are the only discovered models. |
-| `liveModels?` | `boolean` | Fetch the provider's live `/models` catalog on start/sync (default `true`). Set `false` to use only configured `models`. |
+| `liveModels?` | `boolean` | Fetch the provider's live model catalog on start/sync (default `true`). Built-in presets may use a trusted registry URL/query/filter; custom providers default to `${baseUrl}/models`. Set `false` to use only configured `models`. |
 | `selectedModels?` | `string[]` | Catalog allowlist applied after discovery. A non-empty list exposes only those ids to Codex; empty/omitted exposes all discovered models. |
 | `contextWindow?` | `number` | Provider-wide Codex-visible context-window cap for routed catalog entries. Live metadata below this value is kept. |
 | `modelContextWindows?` | `Record<string,number>` | Model-specific context-window caps. These override `contextWindow` for matching model ids and never raise smaller live metadata. |
@@ -325,7 +339,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Model-specific reasoning labels. An empty list hides the effort control for that model. |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | Model-specific reasoning-summary capability. Set a model to `false` to stop advertising summaries and strip summary-delivery fields before an `openai-responses` request. |
 | `modelReasoningSummaryDelivery?` | `Record<string,"sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Model-specific Responses delivery enum. A configured model stays summary-capable and only an existing `stream_options.reasoning_summary_delivery` is rewritten; do not combine it with a `false` summary capability for the same model. |
-| `modelAdapters?` | `Record<string,string>` | Per-model wire override for a gateway that fronts models speaking different wires. Keys are upstream native model ids; values must be `openai-chat` or `openai-responses`. Useful when one model needs the Responses API for hosted tools such as `web_search` while its siblings are fine on chat completions. Models the upstream pins to a single wire, and the canonical ChatGPT forward provider, reject overrides. |
+| `modelAdapters?` | `Record<string,string>` | Per-model wire override for a gateway that fronts models speaking different wires. Keys are upstream native model ids; values must be `openai-chat` or `openai-responses`. Built-in registry defaults may select a verified mixed-wire route automatically (the DeepSeek preset sends `deepseek-v4-flash` over native Responses); an explicit entry wins and can opt a model back out. Models the upstream pins to a single wire, and the canonical ChatGPT forward provider, reject overrides. |
 | `reasoningEffortMap?` | `Record<string,string>` | Provider-wide wire aliases for reasoning labels. Use only when the upstream expects a different value. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | Model-specific wire aliases for reasoning labels. |
 | `noReasoningModels?` | `string[]` | Models that reject a reasoning/thinking param — the adapter drops `reasoning_effort` for them. |
@@ -351,13 +365,16 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 ### Fixed provider endpoints
 
 Routing resolves a provider's endpoint before any adapter sees it, and for most built-in
-providers the registry's own endpoint wins over a `baseUrl` in your config. Three kinds of entry
+providers the registry's own endpoint wins over a `baseUrl` in your config. Four kinds of entry
 keep the configured URL at this stage:
 
 - providers that opt into an override — `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`
   and `alibaba-token-plan-intl`;
 - providers whose registry endpoint is a template you fill in, such as `azure-openai` and
   `cloudflare-ai-gateway`;
+- newly promoted fixed API-key presets that protect name collisions: if an older same-named
+  custom provider points somewhere else, it remains custom instead of sending that key to the new
+  registry host;
 - providers you define yourself, which are not in the registry at all.
 
 Adapters may adjust the resolved URL afterward. The `kiro` adapter, for example, follows the API
@@ -520,6 +537,12 @@ want Codex to see only the models pinned in `models`:
 
 When `liveModels` is `false` and `models` is empty or omitted, opencodex exposes no routed models
 for that provider.
+
+Live discovery rejects a response before caching when it exceeds 4 MiB or 2,000 raw model rows.
+Built-in presets may lower either limit and filter mixed catalogs to chat-eligible rows. An
+oversized or malformed response follows the normal stale/configured fallback path, while
+ineligible rows are excluded. A valid result with zero eligible rows remains an authoritative
+empty catalog; OpenCodex never silently truncates an over-limit response.
 
 Use `selectedModels` for a different purpose: discovery still runs, but only the selected ids are
 published to Codex's catalog and `/v1/models`. The dashboard's full model list remains available so

@@ -18,6 +18,8 @@ export function DashboardOverviewHead({
   health,
   providers,
   usage30d,
+  usageLoading,
+  healthLoading,
   startupHealth,
   projectConfigWarnings,
   maMode,
@@ -27,7 +29,7 @@ export function DashboardOverviewHead({
   setMaHelpOpen,
   switchMaMode,
   updateCheck,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "updateCheck">) {
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "updateCheck">) {
   const t = useT();
   const online = health?.status === "ok";
   const localVersion = updateCheck?.currentVersion ?? health?.version ?? "—";
@@ -73,18 +75,18 @@ export function DashboardOverviewHead({
               </div>
             </div>
           </div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.status")}</div>
             <div className="value" style={{ display: "flex", alignItems: "center", gap: 9, color: online ? "var(--green)" : "var(--red)" }}>
               <span className={`dot ${online ? "dot-green" : "dot-red"}`} />{online ? t("dash.online") : t("dash.offline")}
             </div>
           </div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.versionLocal")}</div>
             <div className="value mono" title={installKind}>{localVersion}</div>
             <div className="muted text-label dash-stat-coverage">{installKind}</div>
           </div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.versionRemote")}</div>
             <div className="value mono" style={remoteBehind ? { color: "var(--amber, var(--orange, #d97706))" } : undefined}>
               {remoteVersion}
@@ -95,9 +97,9 @@ export function DashboardOverviewHead({
                 : "\u00a0"}
             </div>
           </div>
-          <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
-          <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
+          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
+          <div className="stat" aria-busy={usageLoading || undefined}>
             <div className="label">{t("dash.tokens30d")}</div>
             <div className="value mono">{usage30d && usage30d.summary.requests > 0 ? formatTokens(usage30d.summary.totalTokens, locale) : "—"}</div>
             <div className="muted text-label dash-stat-coverage">

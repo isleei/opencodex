@@ -58,6 +58,7 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的成功新 session 绑定数。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |
+| `appOwnedMemoryBudgetMb?` | `number` | `256` | 进程级可驱逐应用保留状态（日志、缓存、Blob 和续接响应负载）上限，单位为 MiB，有效范围为 64–4096。它不是 RSS 或原生运行时内存上限。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 策略：禁用、5 分钟 ephemeral 或 1 小时 extended。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 开启 | 网络搜索 sidecar 选项（见下文）。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 开启 | 视觉 sidecar 选项（见下文）。 |
@@ -136,8 +137,21 @@ ocx start
 x-opencodex-api-key: your-secret-token
 ```
 
-也可以使用 `Authorization: Bearer …` header。启动后，仪表盘生成的 `apiKeys` 可代替环境 token。
-所有候选值均用常量时间（`timingSafeEqual`）比较，避免 timing side-channel。
+接受哪些 header 取决于端点，始终可用的只有 `x-opencodex-api-key`：
+
+| 端点 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | 不接受 | **必需** | 不接受 |
+| `/v1/chat/completions` | 不接受 | **必需** | 不接受 |
+| `/v1/messages` | 可用 | 可用 | 可用 |
+| `/v1/models` | 可用 | 可用 | 可用 |
+
+Responses 和 Chat Completions 只接受专用 header，因为这两条链路上的 `Authorization` 可能属于
+Codex Direct 透传，两个 bearer 域不能混淆。仪表盘的 API 标签页同样从服务端获取并渲染这张表，
+因此不会与代码脱节。
+
+启动后，仪表盘生成的 `apiKeys` 可代替环境 token。所有候选值均用常量时间（`timingSafeEqual`）
+比较，避免 timing side-channel。
 
 :::caution[LAN 暴露]
 绑定到 `0.0.0.0` 会把代理和所有已配置 provider credential 暴露到本地网络。只应在可信网络中
@@ -149,7 +163,7 @@ x-opencodex-api-key: your-secret-token
 | Field | Type | 含义 |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
-| `baseUrl` | `string` | 上游 API base URL。端点固定的内置 provider 会忽略它 —— 见[固定的 provider 端点](#固定的-provider-端点)。 |
+| `baseUrl` | `string` | 上游 API base URL。大多数固定端点的内置 provider 会忽略不一致的地址；新加入且启用冲突保护的 API-key preset 会保留旧有同名 custom provider 的目标。见[固定的 provider 端点](#固定的-provider-端点)。 |
 | `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
@@ -157,7 +171,7 @@ x-opencodex-api-key: your-secret-token
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |
 | `defaultModel?` | `string` | 选中该 provider 但未指定明确模型时使用的模型。 |
 | `models?` | `string[]` | seed/fallback 模型列表。`liveModels` 为 `false` 时，只会发现这些模型。 |
-| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时 `/models` 目录（默认 `true`）。设为 `false` 时只使用配置的 `models`。 |
+| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时模型目录（默认 `true`）。内置 preset 可使用 registry 中受信任的 URL、查询参数和过滤规则；自定义 provider 默认请求 `${baseUrl}/models`。设为 `false` 时只使用配置的 `models`。 |
 | `selectedModels?` | `string[]` | 模型发现后应用的目录 allowlist。非空时只向 Codex 暴露这些 id；为空或省略时暴露所有发现的模型。 |
 | `contextWindow?` | `number` | 路由目录条目的 provider 级 Codex 可见 context-window cap。实时 metadata 更小时保留实时值。 |
 | `modelContextWindows?` | `Record<string,number>` | 模型级 context-window cap。匹配模型时优先于 `contextWindow`，且不会抬高更小的实时 metadata。 |
@@ -172,6 +186,7 @@ x-opencodex-api-key: your-secret-token
 | `modelReasoningEfforts?` | `Record<string,string[]>` | 模型级 reasoning label。空数组会隐藏该模型的 effort 控件。 |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | 模型级 reasoning summary 能力。设为 `false` 时不再声明 summary 支持，并在 `openai-responses` 请求前移除 summary-delivery 字段。 |
 | `modelReasoningSummaryDelivery?` | `Record<string,"sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 模型级 Responses delivery enum。已配置模型保持 summary 能力，适配器只改写现有的 `stream_options.reasoning_summary_delivery`；同一模型不能同时将 summary 能力设为 `false`。 |
+| `modelAdapters?` | `Record<string,string>` | 面向同一 gateway 混合使用不同 wire 的模型级覆盖。键是上游原生模型 id，值只能是 `openai-chat` 或 `openai-responses`。已验证的混合 wire 路由会由 registry 自动提供默认值（DeepSeek preset 会让 `deepseek-v4-flash` 使用原生 Responses）；显式配置优先，也可以把模型切回 Chat。上游固定单一 wire 的模型和 canonical ChatGPT forward provider 不接受覆盖。 |
 | `reasoningEffortMap?` | `Record<string,string>` | provider 级 reasoning label wire alias。只在上游需要不同值时使用。 |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | 模型级 reasoning label wire alias。 |
 | `noReasoningModels?` | `string[]` | 拒绝 reasoning/thinking 参数的模型；adapter 会为它们移除 `reasoning_effort`。 |
@@ -195,11 +210,13 @@ x-opencodex-api-key: your-secret-token
 ### 固定的 provider 端点
 
 路由会在任何 adapter 介入之前解析 provider 的端点；对大多数内置 provider 而言，registry 自带的端点
-优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的只有三类：
+优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的有四类：
 
 - 显式开启覆盖的 provider —— `ollama`、`vllm`、`lm-studio`、`litellm`、`qwen-cloud` 和
   `alibaba-token-plan-intl`；
 - registry 端点本身是待填模板的 provider，例如 `azure-openai` 和 `cloudflare-ai-gateway`；
+- 新加入并启用同名冲突保护的固定 API-key preset：若旧有同名 custom provider 指向其他地址，
+  它会继续作为 custom provider 使用原目标，不会把 key 发往新 registry host；
 - 你自己定义的 provider，它们根本不在 registry 中。
 
 之后 adapter 仍可能调整已解析的 URL。例如 `kiro` adapter 在 host 为标准
@@ -281,6 +298,11 @@ MCP、屏幕录制和 computer-use 使用独立的 `mcpServers` / `desktopExecut
 
 部分 provider 的实时模型目录非常大或很慢。若只想让 Codex 看到 `models` 中固定的模型，请把
 `liveModels` 设为 `false`。
+
+实时发现响应超过 4 MiB 或包含超过 2,000 条原始模型记录时，会在缓存前被拒绝。内置 preset
+还可以降低这些上限，并把混合目录过滤为可用于聊天的模型。超限或格式错误的响应会沿用陈旧缓存/
+静态配置回退，不合格的记录则被排除。若合法响应中没有合格记录，结果仍是权威的空目录；超限响应
+不会被静默截断。
 
 当 `liveModels` 为 `false` 且 `models` 为空或省略时，opencodex 不会为该 provider 暴露任何
 路由模型。

@@ -38,6 +38,7 @@ import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { maybeShowStarPrompt } from "./star-prompt";
+import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
@@ -128,16 +129,21 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
   if (hardPin && preferred > 0) {
     const { reclaimListenPort } = await import("../server/port-reclaim");
     await reclaimListenPort(preferred, config.hostname ?? "127.0.0.1", {
-      timeoutMs: 30_000,
+      // Ghost LISTEN rows with a dead PID can outlive the process for a while.
+      // SetTcpEntry(DELETE_TCB) needs elevation (often returns 317), so the only
+      // reliable non-admin recovery is to wait for the OS to release the TCB.
+      timeoutMs: 60_000,
       intervalMs: 100,
       scanIntervalMs: 500,
       killOcxHolders: false,
-      dropTcpRows: false,
+      dropTcpRows: true,
     });
   }
   try {
     const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1", {
-      preferRetryMs: hardPin ? 0 : 750,
+      // After reclaim, keep probing briefly — ghost rows sometimes clear between
+      // the reclaim deadline and the final listen. Still never hop off `--port`.
+      preferRetryMs: hardPin ? 5_000 : 750,
       preferRetryIntervalMs: 50,
       allowEphemeralFallback: !hardPin,
     });
@@ -190,6 +196,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       server = startServer(port);
+      // Prewarm the live provider model cache as soon as the port is bound so the
+      // first GUI /v1/models (and syncModelsToCodex below) share one discovery flight
+      // instead of racing duplicate upstream /models fetches.
+      scheduleCatalogPrewarm();
       break;
     } catch (err) {
       if (!isAddrInUse(err) || attempt >= 2) throw err;
@@ -1024,6 +1034,11 @@ switch (command) {
   case "api-key": {
     const { handleAccessCommand } = await import("./access");
     process.exitCode = await handleAccessCommand(["key", ...args.slice(1)]);
+    break;
+  }
+  case "export": {
+    const { handleExportCommand } = await import("./export-command");
+    process.exitCode = await handleExportCommand(args.slice(1));
     break;
   }
   case "grok": {

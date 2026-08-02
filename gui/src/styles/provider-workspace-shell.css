@@ -278,6 +278,16 @@
   background: var(--raised);
 }
 
+/* The absolute delete button occupies the rail's trailing status area. Hide the
+   star/status while it is visible instead of letting the button crop either icon. */
+.pws-rail-row-wrap:hover .providers-workspace-rail-trail {
+  opacity: 0;
+}
+
+.providers-workspace-rail-trail {
+  transition: opacity var(--motion-fast);
+}
+
 .pws-rail-row-remove:hover {
   background: var(--raised);
 }
@@ -342,6 +352,7 @@
 
 .providers-workspace-rail-secondary {
   min-width: 0;
+  min-height: 1.15em;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -669,7 +680,7 @@
   font-size: 0.85rem;
   color: inherit;
   cursor: pointer;
-  min-height: 48px;
+  min-height: 62px;
   transition: border-color 0.15s;
 }
 
@@ -687,7 +698,7 @@
   color: inherit;
   background: var(--bg);
   resize: vertical;
-  min-height: 48px;
+  min-height: 62px;
 }
 
 .pws-notes-textarea:focus {

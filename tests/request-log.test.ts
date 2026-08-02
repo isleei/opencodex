@@ -24,8 +24,16 @@ import {
   type RequestLogContext,
 } from "../src/server/request-log";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import type { AdapterEvent } from "../src/types";
-import type { PersistedUsageEntry } from "../src/usage/log";
+import type { AdapterEvent, OcxUsage } from "../src/types";
+import {
+  appendUsageEntry,
+  readUsageEntries,
+  resetUsageReadCacheForTests,
+  type PersistedUsageEntry,
+} from "../src/usage/log";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
@@ -536,6 +544,17 @@ describe("request log metadata", () => {
     expect(combined.map(entry => entry.requestId)).toEqual(["c"]);
   });
 
+  test("filters logs by offset and limit", () => {
+    const logs = Array.from({ length: 5 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
+    expect(filterRequestLogs(logs, new URLSearchParams("limit=2")).map(entry => entry.requestId)).toEqual(["r3", "r4"]);
+    expect(filterRequestLogs(logs, new URLSearchParams("offset=2&limit=2")).map(entry => entry.requestId)).toEqual(["r1", "r2"]);
+  });
+
+  test("limit returns newest rows when buffer exceeds limit", () => {
+    const logs = Array.from({ length: 10 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
+    expect(filterRequestLogs(logs, new URLSearchParams("limit=3")).map(entry => entry.requestId)).toEqual(["r7", "r8", "r9"]);
+  });
+
   test("deferred JSON logging preserves response service tier before final log", async () => {
     const entries: RequestLogEntry[] = [];
     const logCtx = {
@@ -933,6 +952,94 @@ describe("request log metadata", () => {
     });
   });
 
+  test("deferred logging keeps the checkpoint when the bridge reports raw usage (production path)", async () => {
+    // Regression guard for the composition that shipped the bug. The test above exercises the
+    // OLD source of logged usage: re-parsing the bridged wire, where responsesUsage() folds
+    // contextTotalTokens into input_tokens/total_tokens. Production no longer does that —
+    // responses/core.ts wires bridgeToResponsesSSE's onUsage callback, stores the RAW adapter
+    // usage and sets usageFromBridge, which suppresses wire re-parsing. In that shape the
+    // cumulative figure exists ONLY as contextTotalTokens, so usage-log normalization has to
+    // carry the field or Kiro context growth vanishes from every persisted row.
+    const entries: RequestLogEntry[] = [];
+    let reportedRaw: OcxUsage | undefined;
+    const logCtx: Partial<RequestLogContext> = {
+      model: "kiro/claude-opus-5",
+      provider: "kiro-p9d8524",
+      usageLogInputTokens: 200,
+    };
+    const body = bridgeToResponsesSSE(
+      replayAdapterEvents([{
+        type: "done",
+        usage: {
+          inputTokens: 58,
+          outputTokens: 100,
+          contextTotalTokens: 50_000,
+          estimated: true,
+        },
+      }]),
+      "kiro/claude-opus-5",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onUsage: usage => {
+          // Mirror responses/core.ts: store RAW adapter usage and mark provenance so the
+          // deferred logger does not re-parse the wire.
+          reportedRaw = usage;
+          logCtx.usageFromBridge = true;
+          if (usage) logCtx.usage = usage;
+        },
+      },
+    );
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-kiro-raw-usage-checkpoint",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+    );
+    await response.text();
+
+    // The bridge hands the logger the RAW adapter usage, not the projected wire shape.
+    expect(reportedRaw).toMatchObject({ inputTokens: 58, contextTotalTokens: 50_000 });
+    expect(entries).toHaveLength(1);
+    const logged = entries[0]?.usage;
+    expect(logged?.contextTotalTokens).toBe(50_000);
+    // Cache detail stays absent so cost estimation still reports cache_detail_missing —
+    // the provenance behavior that the raw-usage change was introduced to protect.
+    expect(logged && "cacheReadInputTokens" in logged).toBe(false);
+    expect(logged && "cacheCreationInputTokens" in logged).toBe(false);
+
+    // End-to-end: the checkpoint must also survive serialization to usage.jsonl. Asserting
+    // only the in-memory entry would pass even while persistence silently drops the field,
+    // which is exactly how the original regression escaped review.
+    const home = mkdtempSync(join(tmpdir(), "ocx-req-log-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      resetUsageReadCacheForTests();
+      appendUsageEntry({
+        requestId: entries[0]!.requestId,
+        timestamp: entries[0]!.timestamp,
+        provider: entries[0]!.provider,
+        model: entries[0]!.model,
+        status: entries[0]!.status,
+        durationMs: entries[0]!.durationMs,
+        usageStatus: entries[0]!.usageStatus,
+        ...(logged ? { usage: logged } : {}),
+      });
+      const [persisted] = readUsageEntries();
+      expect(persisted?.usage?.contextTotalTokens).toBe(50_000);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("final logging shows numeric Kiro estimates even when SSE usage is absent", async () => {
     const entries: RequestLogEntry[] = [];
     const response = responseWithDeferredRequestLog(
@@ -1154,7 +1261,7 @@ describe("request log restart hydrate", () => {
 
   test("hydrate keeps only the newest MAX_LOG_SIZE rows from a long usage.jsonl", () => {
     clearRequestLogsForTests();
-    const persisted: PersistedUsageEntry[] = Array.from({ length: 205 }, (_, i) => ({
+    const persisted: PersistedUsageEntry[] = Array.from({ length: 2005 }, (_, i) => ({
       requestId: `ocx-${i}`,
       timestamp: i,
       provider: "openai",
@@ -1163,10 +1270,10 @@ describe("request log restart hydrate", () => {
       durationMs: 1,
       usageStatus: "unreported" as const,
     }));
-    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(200);
+    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(2000);
     const ids = getRequestLogEntries().map(e => e.requestId);
     expect(ids[0]).toBe("ocx-5");
-    expect(ids.at(-1)).toBe("ocx-204");
+    expect(ids.at(-1)).toBe("ocx-2004");
   });
 
   test("hydrate swallows usage.jsonl read failures instead of crashing startup", () => {

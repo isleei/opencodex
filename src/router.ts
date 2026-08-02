@@ -3,7 +3,7 @@ import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } fro
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
-import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
+import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
 import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
@@ -40,7 +40,9 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
 export function knownModelIdsForProvider(provName: string, prov: OcxProviderConfig): string[] {
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
-  const registry = PROVIDER_REGISTRY.find(entry => entry.id === provName);
+  const registry = providerMatchesRegistryTransport(provName, prov)
+    ? PROVIDER_REGISTRY.find(entry => entry.id === provName)
+    : undefined;
   for (const id of registry?.models ?? []) ids.add(id);
   // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
   // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps).
@@ -150,6 +152,15 @@ function configuredOriginForLog(url: string): string {
 // `routedProviderConfig` runs per request, so warn once per (provider, discarded, effective) triple.
 // Keyed by the URLs too: editing config.json to a different wrong value warns again.
 const discardedBaseUrlWarnings = new Set<string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileRouterWarningMemos(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = discardedBaseUrlWarnings.size;
+  discardedBaseUrlWarnings.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 /**
  * A pinned registry entry — non-template `baseUrl`, no `allowBaseUrlOverride` — outranks a saved
@@ -192,7 +203,7 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 
 function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
-  if (!registryEntry) {
+  if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
@@ -245,6 +256,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...provider,
     adapter: registryEntry.adapter,
     baseUrl,
+    ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
+      ? { responsesPath: registryEntry.responsesPath }
+      : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
@@ -301,8 +315,13 @@ export class NoEnabledOpenAiProviderError extends Error {
   }
 }
 
+// Codex uses a small number of control-plane model ids that are not part of the public GPT/o
+// naming families. Keep this exact: a broad `codex-*` rule could capture a third-party model.
+const CODEX_INTERNAL_OPENAI_MODELS = new Set(["codex-auto-review"]);
+
 function isBareOpenAiFamilyModel(modelId: string): boolean {
-  return !modelId.includes("/") && /^(?:gpt-|o1-|o3-|o4-)/.test(modelId);
+  return !modelId.includes("/")
+    && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
 }
 
 function routeResult(providerName: string, provider: OcxProviderConfig, modelId: string): RouteResult {
