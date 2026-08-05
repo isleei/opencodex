@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>Универсальный прокси провайдеров для OpenAI Codex &amp; Claude Code</b><br>
-Две команды — и Codex, и Claude Code работают на любой LLM, которую вы укажете.</p>
+<p align="center"><b>Универсальный прокси провайдеров для OpenAI Codex, Claude Code, Claude Desktop, Grok Build и Pi</b><br>
+Две команды — и эти клиенты работают на любой LLM, которую вы укажете.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Подписывайтесь на @claudeebum в X"></a>
@@ -32,7 +32,8 @@ ocx start        # прокси + дашборд: localhost:10100
   <img src="../assets/architecture.png" alt="Архитектура opencodex — Codex CLI направляет запросы через прокси opencodex к любому LLM-провайдеру" width="820">
 </p>
 
-Используйте Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama или любую другую LLM с Codex — и с **Claude Code** — не дожидаясь, пока кто-нибудь добавит поддержку.
+Используйте Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama или любую другую LLM с Codex,
+**Claude Code**, Claude Desktop, Grok Build и **Pi** — не дожидаясь, пока кто-нибудь добавит поддержку.
 
 opencodex — это лёгкий локальный прокси, который транслирует Responses API Codex в протокол, понятный вашему провайдеру. Потоковая передача, вызовы инструментов, токены рассуждений, изображения — всё работает в обе стороны.
 
@@ -42,6 +43,10 @@ opencodex — это лёгкий локальный прокси, которы�
 Существующие треды Codex остаются закреплёнными за аккаунтом, с которого они начались, поэтому
 длительные сессии по SSH, в tmux или с мобильного устройства не переключаются между аккаунтами
 посреди разговора.
+
+Когда поверх друг друга накладываются inject ocx, профили CC Switch и команды Paseo, страница
+**Clients** в дашборде показывает *фактический* base URL и модель каждого агента на диске —
+только чтение, без секретов.
 
 ```
 Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provider
@@ -86,7 +91,8 @@ ocx start                            # or `ocx service` to run it in the backgro
 
 Откройте **http://localhost:10100** и настройте всё в веб-дашборде: добавьте провайдеров
 (40+ встроенных, либо любой OpenAI-совместимый endpoint), выберите модели, управляйте
-аккаунтами. `ocx gui` в любой момент снова откроет дашборд.
+аккаунтами, подключайте Claude / Grok / Pi и проверяйте **Clients** на фактическую маршрутизацию.
+`ocx gui` в любой момент снова откроет дашборд.
 
 ### Для агентов
 
@@ -228,6 +234,8 @@ OpenAI API-ключа и OpenRouter (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-lu
 
 - **Любая LLM в Codex.** Пять протокольных адаптеров покрывают Anthropic Messages, Google Gemini, Azure, сквозной режим OpenAI Responses и любой OpenAI-совместимый эндпоинт Chat Completions — это более 40 провайдеров из коробки.
 - **Любая LLM и в Claude Code.** Тот же демон обслуживает Anthropic Messages API (`/v1/messages` + `count_tokens`): `ocx claude` запускает Claude Code с полностью готовой конфигурацией, а маршрутизируемые модели появляются в его родном селекторе `/model` благодаря обнаружению моделей через шлюз (алиасы `claude-ocx-<provider>--<model>`, Claude Code 2.1.129+). Слоты и сопоставления моделей настраиваются на странице Claude панели управления.
+- **Эффективный статус Clients.** Страница **Clients** (и `GET /api/clients/status`) читает base URL, модель и лаунчер Claude/Codex/Pi/Grok/OpenCode/agy с диска и помечает путь как via ocx / direct / mixed — без секретов.
+- **Grok Build и Pi.** Ограда моделей Grok и квоты аккаунта; `ocx pi` / страница Pi пишут только `providers.opencodex`.
 - **Безопасный пул аккаунтов ChatGPT.** Существующие треды Codex остаются на одном аккаунте,
   а новые сессии могут автоматически выбирать из пула аккаунт с меньшим использованием —
   с обновлением квот и метками запросов без персональных данных.
@@ -287,8 +295,9 @@ ocx status                     # работает ли прокси?
 ocx login <provider>          # вход через OAuth (xai, anthropic, kimi, cursor, ...)
 ocx logout <provider>          # удалить сохранённый вход
 ocx account <list|current|use> # просмотр/переключение аккаунтов и пулов API-ключей (маскировано; также refresh/auto-switch/remove/add-key)
-ocx gui                        # открыть веб-панель управления
+ocx gui                        # открыть веб-панель (Clients, Claude, Grok, Pi, …)
 ocx claude [args...]           # запустить Claude Code, подключённый к прокси (обнаружение моделей включено)
+ocx pi [status|apply|…]        # управлять или запускать Pi (только providers.opencodex)
 ocx service [install|start|stop|status|uninstall]   # установить/обновить/запустить фоновую службу
 ocx update [--tag preview]     # обновить opencodex; preview-установки остаются на @preview
 ```

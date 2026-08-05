@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>面向 OpenAI Codex 与 Claude Code 的通用 provider 代理</b><br>
-两条命令，Codex 和 Claude Code 就能用任何 LLM 跑起来。</p>
+<p align="center"><b>面向 OpenAI Codex、Claude Code、Claude Desktop、Grok Build 与 Pi 的通用 provider 代理</b><br>
+两条命令，这些客户端都能用任何 LLM 跑起来。</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
@@ -32,13 +32,16 @@ ocx start        # 代理 + 仪表盘: localhost:10100
   <img src="../assets/architecture.png" alt="opencodex 架构 — Codex CLI 通过 opencodex 代理路由到任意 LLM 提供商" width="820">
 </p>
 
-在 Codex 中 —— 以及在 **Claude Code** 中 —— 使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任意其他 LLM，无需等待官方添加支持。
+在 Codex、**Claude Code**、Claude Desktop、Grok Build 与 **Pi** 中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任意其他 LLM，无需等待官方添加支持。
 
 opencodex 是一个轻量级本地代理，把 Codex 的 Responses API 翻译成你的 provider 所讲的协议。streaming、tool 调用、reasoning token、图片 —— 全部双向工作。
 
 它还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，在仪表盘中刷新它们的
 5 小时 / 每周 / 30 天配额，并让新会话自动路由到使用量最低的健康账户。现有 Codex 线程会固定在启动它的
 账户上，因此长时间的 SSH、tmux 或移动端连接的会话不会在对话中途切换账户。
+
+当 ocx 注入、CC Switch 配置与 Paseo 启动器叠在一起时，仪表盘 **客户端（Clients）** 页可一眼看清各
+coding agent **磁盘上的有效** Base URL / 模型（经 ocx / 直连 / 混合），只读探测、不写配置、不暴露密钥。
 
 ```
 Codex CLI / App / SDK ──/v1/responses──▶ opencodex ──▶ Any provider
@@ -82,7 +85,8 @@ ocx start                            # 或使用 `ocx service` 在后台运行
 ```
 
 打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置：添加 provider（40 多个内置
-provider，或任意 OpenAI 兼容端点）、选择模型并管理账户。随时运行 `ocx gui` 可重新打开仪表板。
+provider，或任意 OpenAI 兼容端点）、选择模型、管理账户，配置 Claude / Grok / Pi，并在
+**客户端** 页查看有效路由。随时运行 `ocx gui` 可重新打开仪表板。
 
 ### 面向代理
 
@@ -130,6 +134,8 @@ npm 警告里给出的缩写命令缺少包名，会把当前目录重新安装�
 
 - **在 Codex 中使用任意 LLM。** 5 种协议 adapter 覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses 直通，以及所有 OpenAI 兼容 Chat Completions 端点 —— 即开箱即用的 **40+ provider**。
 - **在 Claude 中也能使用任意 LLM。** `ocx claude` 可通过代理启动 Claude Code。Claude 仪表盘还提供独立的 Desktop 配置，可管理 Opus、Fable、Sonnet、Haiku 四个系列，并支持拖放、键盘操作和 JSON 导入/导出。
+- **Grok Build 与 Pi。** 仪表盘可管理 Grok 围栏模型与账号配额；`ocx pi` / Pi 页只写入 `providers.opencodex`，其它 Pi 配置保持不动。
+- **客户端有效配置。** 仪表盘 **客户端** 页（及 `GET /api/clients/status`）读取 Claude / Codex / Pi / Grok / OpenCode / agy 的磁盘 Base URL、模型、启动器，并标出经 ocx / 直连 / 混合 / 缺失；可选显示 CC Switch 配置名与 Paseo 命令，从不返回密钥。
 - **安全地池化 ChatGPT 账户。** 现有 Codex 线程保持在一个账户上，而新会话可以从池中自动挑选使用量更低的账户，并带有配额刷新和非 PII 请求标签。
 - **登录一次，免填 API key。** xAI、Anthropic、Kimi 支持 OAuth，可用现有账户认证，token 自动刷新。也可以转发 `codex login`、粘贴 API key，或使用 `${ENV_VAR}` 引用 —— 随你选择。
 - **Codex 在哪里能用，它就在哪里能用。** 自动注入 Codex CLI、TUI、App 和 SDK。路由模型像原生模型一样出现在 Codex 的模型选择器里。
@@ -137,7 +143,7 @@ npm 警告里给出的缩写命令缺少包名，会把当前目录重新安装�
 - **为 preview-gated OpenAI rollout 做好准备。** GPT-5.6 Sol/Terra/Luna 保留 upstream effort 阶梯。Direct/Multi 使用 372k Codex 契约，OpenAI API 与 OpenRouter 使用 1.05M 元数据。
 - **给任意模型超能力。** 非 OpenAI 模型也能通过你的 ChatGPT 登录上运行的 `gpt-5.4-mini` sidecar 获得真正的网页搜索和图片理解。
 - **原生生成图片。** Codex 的独立 `image_gen` 工具通过 `POST /v1/images/generations` 生成图片、通过 `POST /v1/images/edits` 编辑图片；它独立于 hosted Responses 的 `image_generation` 工具。
-- **看清正在发生什么。** Web 仪表盘展示 provider、OAuth 状态、模型选择和实时请求日志；当上游返回时，也会包含 cached/cache-write token 计数 —— 不必再猜测请求为何失败。
+- **看清正在发生什么。** Web 仪表盘展示 provider、OAuth 状态、模型选择、客户端路由和实时请求日志；当上游返回时，也会包含 cached/cache-write token 计数 —— 不必再猜测请求为何失败。
 - **后台运行。** 安装为系统服务（launchd / systemd / Task Scheduler）后开机自启，无需操心。
 - **干净退出，零残留。** `ocx stop`（或仪表盘的 Stop 按钮）会关闭代理、停止已安装的后台服务，并将 Codex 恢复为原始配置。之后 `codex` 就像从未安装过 opencodex 一样工作 —— 无残留配置，无僵尸进程。
 
@@ -263,13 +269,20 @@ ocx status                     # 查看代理是否在运行
 ocx login <xai|anthropic|kimi> # OAuth 登录
 ocx logout <provider>          # 移除已保存的登录
 ocx account <list|current|use> # 查看/切换账号与 API-key pool（脱敏；含 refresh/auto-switch/remove/add-key）
-ocx gui                        # 打开 Web 仪表盘
+ocx gui                        # 打开 Web 仪表盘（客户端、Claude、Grok、Pi 等）
 ocx claude [args...]           # 启动接入代理的 Claude Code（模型发现已开启）
 ocx claude desktop             # 保存并应用 Claude Desktop 四系列配置
+ocx pi [status|apply|…]        # 管理或启动 Pi（仅写入 providers.opencodex）
 ocx codex-shim install         # 运行 codex 时自动启动代理
 ocx service [install|start|stop|status|uninstall]   # 安装/更新/启动后台服务
 ocx update [--tag preview]     # 更新 opencodex；preview 安装保持 @preview
 ```
+
+### 客户端有效配置
+
+仪表盘 **客户端** 页只读探测本机各 coding agent 的有效路由（Base URL / 模型 / 启动器 / 切换器
+配置名），对应 management API：`GET /api/clients/status`。不会改写客户端文件，也不会序列化
+API key。适合在 CC Switch 与 ocx 注入并存时确认「当前到底走哪条链路」。
 
 ### Claude Desktop 配置
 

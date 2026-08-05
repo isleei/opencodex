@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex &amp; Claude Code를 위한 범용 프로바이더 프록시</b><br>
-명령어 두 줄이면 Codex와 Claude Code가 원하는 LLM으로 돌아갑니다.</p>
+<p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop, Grok Build &amp; Pi를 위한 범용 프로바이더 프록시</b><br>
+명령어 두 줄이면 이 클라이언트들이 원하는 LLM으로 돌아갑니다.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
@@ -32,7 +32,9 @@ ocx start        # 프록시 + 대시보드: localhost:10100
   <img src="../assets/architecture.png" alt="opencodex 아키텍처 — Codex CLI가 opencodex 프록시를 통해 모든 LLM 프로바이더로 라우팅" width="820">
 </p>
 
-Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등 어떤 LLM이든 Codex에서 — 그리고 **Claude Code**에서도 — 사용하세요. 누군가 지원을 추가해 주길 기다릴 필요 없이.
+Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등 어떤 LLM이든 Codex, **Claude Code**, Claude Desktop, Grok Build, **Pi**에서 사용하세요. 누군가 지원을 추가해 주길 기다릴 필요 없이.
+
+ocx inject, CC Switch 프로필, Paseo 런처가 겹칠 때 대시보드 **Clients** 페이지에서 각 에이전트의 *실제* 디스크 base URL/모델을 읽기 전용으로 확인할 수 있습니다(비밀 키는 노출하지 않음).
 
 opencodex는 Codex의 Responses API를 프로바이더가 쓰는 프로토콜로 변환해 주는 가벼운 로컬 프록시입니다. streaming, tool 호출, reasoning 토큰, 이미지까지 양방향으로 모두 동작합니다.
 
@@ -82,7 +84,7 @@ npm install -g @bitkyc08/opencodex
 ocx start        # 또는 백그라운드에서 실행하려면 `ocx service`
 ```
 
-http://localhost:10100에서 웹 대시보드를 열어 프로바이더, 모델, 계정을 설정하세요. `ocx gui`로 언제든지 다시 열 수 있습니다.
+http://localhost:10100에서 웹 대시보드를 열어 프로바이더, 모델, 계정을 설정하고 Claude / Grok / Pi를 연결하며 **Clients**에서 유효 라우팅을 확인하세요. `ocx gui`로 언제든지 다시 열 수 있습니다.
 
 ### 에이전트용
 
@@ -193,6 +195,8 @@ opencodex는 두 가지 동작을 분리해서 유지합니다:
 
 - **어떤 LLM이든 Codex에서.** 5개의 프로토콜 adapter가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 즉 기본 제공 **40개 이상의 프로바이더**입니다.
 - **Claude에서도 어떤 LLM이든.** `ocx claude`로 Claude Code를 프록시에 연결해 실행할 수 있습니다. Claude 대시보드에는 Opus, Fable, Sonnet, Haiku를 관리하는 별도 Desktop 프로필과 드래그/키보드 조작, JSON 가져오기/내보내기도 있습니다.
+- **Clients 유효 상태.** 대시보드 **Clients**(및 `GET /api/clients/status`)가 Claude/Codex/Pi/Grok/OpenCode/agy의 디스크 base URL·모델·런처를 읽고 via ocx / direct / mixed로 표시합니다. 비밀은 반환하지 않습니다.
+- **Grok Build & Pi.** Grok 펜스와 계정 쿼터, `ocx pi` / Pi 페이지(providers.opencodex만 기록).
 - **ChatGPT 계정을 안전하게 풀링.** 기존 Codex 스레드는 한 계정에 유지하면서, 새 세션은 쿼터 갱신과 비-PII 요청 라벨과 함께 풀에서 사용량이 낮은 계정을 자동 선택할 수 있습니다.
 - **한 번 로그인하면 API 키는 생략.** xAI, Anthropic, Kimi는 OAuth를 지원하므로 기존 계정으로 인증할 수 있고 토큰은 자동 갱신됩니다. 또는 `codex login`을 forward 하거나, API 키를 붙여넣거나, `${ENV_VAR}` 참조를 쓸 수 있습니다 — 선택은 자유입니다.
 - **Codex가 동작하는 모든 곳에서.** Codex CLI, TUI, App, SDK에 자동으로 주입됩니다. 라우팅된 모델이 네이티브 모델처럼 Codex 모델 선택기에 나타납니다.
@@ -236,9 +240,10 @@ ocx status                     # 프록시 실행 중인지 확인
 ocx login <xai|anthropic|kimi> # OAuth 로그인
 ocx logout <provider>          # 저장된 로그인 정보 삭제
 ocx account <list|current|use> # 계정/API key pool 조회·전환 (마스킹; refresh/auto-switch/remove/add-key 포함)
-ocx gui                        # 웹 대시보드 열기
+ocx gui                        # 웹 대시보드 열기 (Clients, Claude, Grok, Pi, …)
 ocx claude [args...]           # 프록시에 연결된 Claude Code 실행 (모델 디스커버리 켜짐)
 ocx claude desktop             # Claude Desktop 4개 family 프로필 저장 및 적용
+ocx pi [status|apply|…]        # Pi 관리 또는 실행 (providers.opencodex만 기록)
 ocx codex-shim install         # codex 실행 시 `ocx ensure` 실행
 ocx service [install|start|stop|status|uninstall]   # 백그라운드 서비스 설치/갱신/시작
 ocx update [--tag preview]     # opencodex 업데이트; preview 설치는 @preview 유지

@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex &amp; Claude Code 向けの汎用プロバイダープロキシ</b><br>
-コマンド2つで、Codex と Claude Code の両方が好きな LLM で動きます。</p>
+<p align="center"><b>OpenAI Codex、Claude Code、Claude Desktop、Grok Build、Pi 向けの汎用プロバイダープロキシ</b><br>
+コマンド2つで、これらのクライアントが好きな LLM で動きます。</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X で @claudeebum をフォロー"></a>
@@ -32,7 +32,9 @@ ocx start        # プロキシ + ダッシュボード: localhost:10100
   <img src="../assets/architecture.png" alt="opencodex アーキテクチャ — Codex CLI が opencodex プロキシ経由で任意の LLM プロバイダーにルーティング" width="820">
 </p>
 
-Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama など、任意の LLM を Codex で — そして **Claude Code** でも — 使えます。誰かがサポートを追加してくれるのを待つ必要はありません。
+Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama など、任意の LLM を Codex、**Claude Code**、Claude Desktop、Grok Build、**Pi** で使えます。誰かがサポートを追加してくれるのを待つ必要はありません。
+
+ocx の inject、CC Switch プロファイル、Paseo ランチャーが重なるとき、ダッシュボードの **Clients** ページで各エージェントの *実効* ディスク上 base URL / モデルを読み取り専用で確認できます（秘密は出しません）。
 
 opencodex は Codex の Responses API をプロバイダーが話すプロトコルに変換する、軽量なローカルプロキシです。ストリーミング、ツール呼び出し、推論トークン、画像 — すべて双方向で動作します。
 
@@ -82,7 +84,7 @@ npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled auto
 ocx start                            # or `ocx service` to run it in the background
 ```
 
-**http://localhost:10100** を開き、Web ダッシュボードですべてを設定します。40 以上の組み込みプロバイダーまたは OpenAI 互換エンドポイントの追加、モデルの選択、アカウントの管理ができます。`ocx gui` を実行すれば、いつでもダッシュボードを開き直せます。
+**http://localhost:10100** を開き、Web ダッシュボードですべてを設定します。40 以上の組み込みプロバイダーまたは OpenAI 互換エンドポイントの追加、モデルの選択、アカウント管理、Claude / Grok / Pi の接続、**Clients** での実効ルーティング確認ができます。`ocx gui` を実行すれば、いつでもダッシュボードを開き直せます。
 
 ### エージェント向け
 
@@ -202,6 +204,8 @@ opencodex は 2 つの動作を分離して保持します:
 
 - **任意の LLM を Codex で。** 5 つのプロトコルアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses パススルー、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — つまり組み込みで **40 以上のプロバイダー**です。
 - **Claude Code でも任意の LLM を。** 同じデーモンが Anthropic Messages API(`/v1/messages` + `count_tokens`)を提供します: `ocx claude` が Claude Code を完全に接続された状態で起動し、ルーティングモデルがゲートウェイモデルディスカバリでネイティブ `/model` ピッカーに表示されます(`claude-ocx-<provider>--<model>` エイリアス、Claude Code 2.1.129+)。スロットとモデルマッピングはダッシュボードの Claude ページで設定します。
+- **Clients 実効ステータス。** ダッシュボード **Clients**（および `GET /api/clients/status`）が各コーディングエージェントのディスク上 base URL / モデル / ランチャーを読み、via ocx / direct / mixed を表示します。秘密は返しません。
+- **Grok Build と Pi。** Grok フェンスとアカウントクォータ、`ocx pi` / Pi ページ（`providers.opencodex` のみ書き込み）。
 - **ChatGPT アカウントを安全にプール。** 既存の Codex スレッドは一つのアカウントに維持しつつ、新規セッションはクォータ更新と非 PII リクエトラベルと共にプールから使用量の少ないアカウントを自動選択できます。
 - **一度ログインすれば API キーは省略可。** xAI、Anthropic、Kimi は OAuth をサポートするので既存アカウントで認証でき、トークンは自動更新されます。または `codex login` を転送、API キーを貼り付け、`${ENV_VAR}` 参照を使えます — 自由に選べます。
 - **Codex が動くすべての場所で。** Codex CLI、TUI、App、SDK に自動で注入されます。ルーティングモデルはネイティブモデルと同様に Codex モデルピッカーに表示されます。
@@ -254,8 +258,9 @@ ocx status                     # プロキシは起動中か?
 ocx login <provider>           # OAuth ログイン(xai, anthropic, kimi, cursor, ...)
 ocx logout <provider>          # 保存されたログインを削除
 ocx account <list|current|use> # アカウント/API キープールの一覧・切替(マスク済み; refresh/auto-switch/remove/add-key 含む)
-ocx gui                        # ウェブダッシュボードを開く
+ocx gui                        # ウェブダッシュボードを開く (Clients, Claude, Grok, Pi, …)
 ocx claude [args...]           # プロキシに接続した Claude Code を起動(モデルディスカバリ オン)
+ocx pi [status|apply|…]        # Pi の管理または起動 (providers.opencodex のみ書き込み)
 ocx codex-shim install         # codex 起動時に `ocx ensure` を実行
 ocx service [install|start|stop|status|uninstall]   # バックグラウンドサービスのインストール/更新/開始
 ocx update [--tag preview]     # opencodex を更新; preview インストールは @preview を維持

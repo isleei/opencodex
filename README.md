@@ -1,5 +1,5 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
+<p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop, Grok Build &amp; Pi</b><br>
 Two commands, and every one of them runs any LLM you point it at.</p>
 
 <p align="center">
@@ -44,9 +44,13 @@ ocx start        # proxy + dashboard on localhost:10100
 opencodex is a lightweight local proxy that translates Codex's Responses API into whatever your
 provider speaks — streaming, tool calls, reasoning tokens, images, in both directions. Use Claude,
 Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama, or any other LLM with Codex, Claude Code, Claude
-Desktop, and Grok Build. It can also manage a **ChatGPT account pool** for Codex auth: add accounts,
-refresh their quotas in the dashboard, and let new sessions auto-route to the lowest-usage healthy
-account while existing threads stay pinned to the account that started them.
+Desktop, Grok Build, and Pi. It can also manage a **ChatGPT account pool** for Codex auth: add
+accounts, refresh their quotas in the dashboard, and let new sessions auto-route to the lowest-usage
+healthy account while existing threads stay pinned to the account that started them.
+
+When several launchers stack (ocx inject, CC Switch profiles, Paseo commands), the dashboard
+**Clients** page shows each agent's *effective* on-disk base URL and model — via ocx, direct, or
+mixed — without writing configs or exposing API keys.
 
 ## Quick start
 
@@ -58,8 +62,9 @@ ocx start                            # or `ocx service` to run it in the backgro
 ```
 
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
-(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
-re-opens the dashboard at any time.
+(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts, wire Claude /
+Grok / Pi, and check the **Clients** page for effective routing. `ocx gui` re-opens the dashboard
+at any time.
 
 ### For agents
 
@@ -98,8 +103,11 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 ## Highlights
 
-- **Use any LLM with Codex, Claude Code, Claude Desktop, and Grok Build** — 40+ providers out of
-  the box, each keeping its own native UI.
+- **Use any LLM with Codex, Claude Code, Claude Desktop, Grok Build, and Pi** — 40+ providers out
+  of the box, each keeping its own native UI.
+- **Clients effective status** — dashboard **Clients** (and `GET /api/clients/status`) reads each
+  coding agent's on-disk base URL / model / launcher and labels the path as via ocx, direct,
+  mixed, or missing. Optional CC Switch profile names and Paseo command overrides; never secrets.
 - **Pool ChatGPT accounts safely** — thread affinity, quota-aware auto-switching, cooldown and
   fail-closed auth handling.
 - **Combos** — one virtual model id with failover or weighted round-robin across providers. See
@@ -111,8 +119,8 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
   `codex login`, paste a key, or use `${ENV_VAR}` references.
 - **Web search & vision sidecars** — non-OpenAI models get real web search and image understanding
   through a sidecar over your ChatGPT login.
-- **See what's happening** — the dashboard shows providers, OAuth status, model selection, and a
-  live request log with cache token counts.
+- **See what's happening** — the dashboard shows providers, OAuth status, model selection, client
+  routing, and a live request log with cache token counts.
 - **Clean exit, zero residue** — `ocx stop` restores Codex to its original configuration.
 
 ## Model routing
@@ -146,7 +154,9 @@ ocx stop                       # stop + restore native Codex
 ocx service [install|start|stop|status|uninstall|remove]  # background service
 ocx codex-shim install         # start the proxy on demand whenever `codex` launches
 ocx status                     # is the proxy running?
-ocx gui                        # open the web dashboard
+ocx gui                        # open the web dashboard (Clients, Claude, Grok, Pi, …)
+ocx claude [args...]           # launch Claude Code wired to the proxy
+ocx pi [status|apply|…]        # manage or launch Pi (providers.opencodex only)
 ocx provider <...>             # manage providers (list/add/edit/test/remove)
 ocx account <...>              # manage ChatGPT accounts & API-key pools
 ocx combo <...>                # manage failover / round-robin combos
