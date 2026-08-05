@@ -148,7 +148,7 @@ function spawnBindProbe(bin: string, script: string): boolean {
 
 /**
  * Live global package Bun — not the npm rename tree the update worker may still
- * be executing from (`@bitkyc08/.opencodex-*`). Reject the tiny postinstall
+ * be executing from (`@scope/.opencodex-*`). Reject the tiny postinstall
  * stub so probes fall back to the worker runtime instead of failing forever.
  */
 function livePackageBunPath(): string | null {
@@ -209,11 +209,17 @@ async function waitForGhostListenClear(
 function packageLauncherPath(): string {
   // This module lives at src/update/job.ts — the launcher is <pkg-root>/bin/ocx.mjs.
   // After `npm install -g`, import.meta.url can still point at npm's renamed temp
-  // tree (`@bitkyc08/.opencodex-*`). Prefer the live package path when that happens.
+  // tree (`@scope/.opencodex-*`). Prefer the live package path when that happens.
   const fromMeta = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "ocx.mjs");
   if (!/[\\/]\.opencodex-/i.test(fromMeta) && existsSync(fromMeta)) return fromMeta;
-  const live = fromMeta.replace(/[\\/]@bitkyc08[\\/]\.opencodex-[^\\/]+/i, `${sep}@bitkyc08${sep}opencodex`);
-  if (live !== fromMeta && existsSync(live)) return live;
+  // Support both the upstream scope and this fork's publish scope.
+  for (const scope of ["iislee", "bitkyc08"]) {
+    const live = fromMeta.replace(
+      new RegExp(`[\\\\/]@${scope}[\\\\/]\\.opencodex-[^\\\\/]+`, "i"),
+      `${sep}@${scope}${sep}opencodex`,
+    );
+    if (live !== fromMeta && existsSync(live)) return live;
+  }
   return fromMeta;
 }
 
@@ -768,7 +774,7 @@ async function restartAfterUpdate(
     killOcxHolders: true,
     // Windows scheduler wrappers can mint a *new* bun PID during the wait; keep
     // killing every ocx listener on this port, not only the pre-wait snapshot.
-    // npm rename trees under `@bitkyc08/.opencodex-*` are classified as ocx by
+    // npm rename trees under `@scope/.opencodex-*` are classified as ocx by
     // isOcxStartCommandLine — never kill unknown foreign claimants on this port.
     killAllOcxOnPort: true,
     onlyKillPids,
@@ -1070,7 +1076,7 @@ function restartFailureHint(port: number): string {
   return `Update installed, but the restarted proxy did not stay healthy on port ${port}. `
     + `Try 'ocx start --port ${port}'. `
     + "If the update log shows bun postinstall or EPERM warnings, "
-    + "reinstall with 'npm install -g --allow-scripts=bun @bitkyc08/opencodex'.";
+    + "reinstall with 'npm install -g --allow-scripts=bun @iislee/opencodex'.";
 }
 
 type AwaitHealthyResult =
