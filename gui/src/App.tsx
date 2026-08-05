@@ -12,7 +12,9 @@ import CloudSync from "./pages/CloudSync";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import Claude from "./pages/Claude";
+import Clients from "./pages/Clients";
 import Grok from "./pages/Grok";
+import Pi from "./pages/Pi";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
@@ -42,8 +44,10 @@ const PAGE_TKEY: Record<Page, TKey> = {
   cloud: "nav.cloud",
   "codex-auth": "nav.codexAuth",
   api: "nav.api",
+  clients: "nav.clients",
   claude: "nav.claude",
   grok: "nav.grok",
+  pi: "nav.pi",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -60,8 +64,10 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "cloud", tkey: "nav.cloud", Icon: IconCloud },
   { id: "api", tkey: "nav.api", Icon: IconGlobe },
+  { id: "clients", tkey: "nav.clients", Icon: IconMonitor },
   { id: "claude", tkey: "nav.claude", Icon: IconSparkle },
   { id: "grok", tkey: "nav.grok", Icon: IconBoxes },
+  { id: "pi", tkey: "nav.pi", Icon: IconBot },
 ];
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
@@ -319,8 +325,10 @@ export default function App() {
             {page === "cloud" && <CloudSync apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "api" && <ApiKeys apiBase={API_BASE} />}
+            {page === "clients" && <Clients apiBase={API_BASE} />}
             {page === "claude" && <Claude apiBase={API_BASE} />}
             {page === "grok" && <Grok apiBase={API_BASE} />}
+            {page === "pi" && <Pi apiBase={API_BASE} />}
           </ErrorBoundary>
         </div>
       </main>

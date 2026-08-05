@@ -24,7 +24,7 @@ export function getOrCreateDeviceId(): string {
   }
   const id = createHash("sha256").update(randomBytes(32)).digest("hex").slice(0, 16);
   writeFileSync(path, `${id}\n`, { encoding: "utf8", mode: 0o600 });
-  hardenSecretPath(path);
+  hardenSecretPath(path, { required: true });
   return id;
 }
 
@@ -47,7 +47,7 @@ export function writeCloudSyncSettings(settings: CloudSyncSettings): void {
   const path = cloudSyncSettingsPath();
   const next: CloudSyncSettings = { ...settings, provider: "onedrive" };
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  hardenSecretPath(path);
+  hardenSecretPath(path, { required: true });
 }
 
 /** Resolve Microsoft public client id: flag > env > settings. */

@@ -1095,6 +1095,11 @@ switch (command) {
     const { cmdOpencode } = await import("./opencode");
     process.exit(await cmdOpencode(args.slice(1)));
   }
+  case "pi": {
+    const { handlePiCommand } = await import("./pi");
+    process.exitCode = await handlePiCommand(args.slice(1));
+    break;
+  }
     case "help":
   case "--help":
   case "-h":

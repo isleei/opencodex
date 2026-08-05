@@ -9,6 +9,7 @@ import { setClientResourceData } from "../client-resource";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { grokGroupView, type GrokCandidate } from "./grok-groups";
+import GrokAccountQuota from "../components/GrokAccountQuota";
 
 type TFn = (key: TKey, vars?: Record<string, string | number>) => string;
 
@@ -220,6 +221,14 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       {/* A refresh that fails while cached data is on screen must say so instead of leaving the
           page looking settled; the notice then owns the live region for this transition. */}
       {state.showError && <Notice tone="err">{t("grok.loadFail")}</Notice>}
+
+      {/* Account quota first (Codex Auth–depth): models fence stays below. */}
+      <div style={{ marginBottom: 20 }}>
+        <GrokAccountQuota apiBase={apiBase} />
+      </div>
+
+      <h3 className="panel-title" style={{ margin: "8px 0 4px" }}>{t("grok.modelsSection")}</h3>
+      <p className="page-sub" style={{ marginTop: 0 }}>{t("grok.modelsSectionSub")}</p>
 
       {status && status.candidates.length > 0 && (
         <div className="claude-profile-bar">

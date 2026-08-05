@@ -87,7 +87,7 @@ export function readOneDriveToken(): OneDriveTokenStore | null {
 export function writeOneDriveToken(store: OneDriveTokenStore): void {
   const path = onedriveAuthPath();
   writeFileSync(path, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  hardenSecretPath(path);
+  hardenSecretPath(path, { required: true });
 }
 
 export function clearOneDriveToken(): void {

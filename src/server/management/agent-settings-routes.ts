@@ -607,6 +607,136 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
   }
 
+  // Pi coding agent: status, models inject/remove, curated settings, packages, extensions.
+  // models.json only ever mutates providers.opencodex; package installs shell out to `pi`.
+  if (url.pathname === "/api/pi" && req.method === "GET") {
+    try {
+      const { readPiStatus, piInstallHint } = await import("../../pi/status");
+      const status = await readPiStatus();
+      return jsonResponse({
+        ...status,
+        hint: piInstallHint(status),
+        port: Number(url.port) || config.port,
+      });
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/apply" && req.method === "POST") {
+    try {
+      const { syncPiConfig } = await import("../../pi/sync");
+      const { findLiveProxy } = await import("../proxy-liveness");
+      const live = await findLiveProxy();
+      const port = live?.port ?? config.port;
+      const hostname = live?.hostname ?? config.hostname;
+      const result = await syncPiConfig(port, config, { hostname });
+      return jsonResponse({
+        ok: result.ok,
+        changed: result.changed,
+        message: result.message,
+        modelCount: result.modelCount,
+        modelsPath: result.modelsPath,
+        ...(result.skippedReason ? { skippedReason: result.skippedReason } : {}),
+      }, result.ok ? 200 : 500);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/remove" && req.method === "POST") {
+    try {
+      const { removePiModels } = await import("../../pi/models");
+      const result = removePiModels();
+      return jsonResponse({
+        ok: result.ok,
+        changed: result.changed,
+        message: result.message,
+        modelsPath: result.modelsPath,
+      }, result.ok ? 200 : 500);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/settings" && req.method === "GET") {
+    try {
+      const { readPiSettings } = await import("../../pi/settings");
+      return jsonResponse(readPiSettings());
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/settings" && req.method === "PUT") {
+    let body: unknown;
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    try {
+      const { writePiSettings } = await import("../../pi/settings");
+      const result = writePiSettings(body);
+      return jsonResponse({
+        ok: result.ok,
+        changed: result.changed,
+        message: result.message,
+        settingsPath: result.settingsPath,
+        ...(result.settings ? { settings: result.settings } : {}),
+      }, result.ok ? 200 : 400);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/packages" && req.method === "GET") {
+    try {
+      const { listPiPackagesDetailed } = await import("../../pi/packages");
+      return jsonResponse(await listPiPackagesDetailed());
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/packages/install" && req.method === "POST") {
+    let body: { source?: unknown };
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.source !== "string") return jsonResponse({ error: "source is required" }, 400);
+    try {
+      const { installPiPackage } = await import("../../pi/packages");
+      const result = await installPiPackage(body.source);
+      return jsonResponse(result, result.ok ? 200 : 400);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/packages/remove" && req.method === "POST") {
+    let body: { source?: unknown };
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.source !== "string") return jsonResponse({ error: "source is required" }, 400);
+    try {
+      const { removePiPackage } = await import("../../pi/packages");
+      const result = await removePiPackage(body.source);
+      return jsonResponse(result, result.ok ? 200 : 400);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+  if (url.pathname === "/api/pi/extensions" && req.method === "GET") {
+    try {
+      const { readPiExtensions } = await import("../../pi/extensions");
+      return jsonResponse(readPiExtensions());
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  }
+
   // Claude Desktop profile: routed/native model assignments for the Desktop 3P config.
   if (url.pathname === "/api/claude-desktop" && req.method === "GET") {
     try {

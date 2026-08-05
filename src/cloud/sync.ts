@@ -34,7 +34,7 @@ function readLocalOptional(name: string): string | null {
 function writeLocal(name: string, content: string, mode = 0o600): void {
   const path = localPath(name);
   writeFileSync(path, content, { encoding: "utf8", mode });
-  hardenSecretPath(path);
+  hardenSecretPath(path, { required: true });
 }
 
 export interface PushOptions {

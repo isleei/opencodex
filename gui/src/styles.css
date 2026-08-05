@@ -2353,3 +2353,62 @@ button.prov-account-row.active { cursor: default; }
 }
 .claude-effort-badge.on { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .claude-effort-badge.off { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }
+
+/* ── Clients effective-status page ── */
+.clients-proxy-card { margin-bottom: 16px; padding: 14px 16px; }
+.clients-proxy-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+}
+.clients-meta { color: var(--muted); font-size: var(--text-caption); }
+.clients-hint { color: var(--muted); font-size: var(--text-label); margin: 10px 0 0; }
+.clients-table-card { padding: 0; overflow: hidden; }
+.clients-table-wrap { overflow-x: auto; }
+.clients-table {
+  width: 100%; border-collapse: collapse; font-size: var(--text-body);
+}
+.clients-table th,
+.clients-table td {
+  text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.clients-table th {
+  font-size: var(--text-caption); font-weight: var(--weight-semibold);
+  color: var(--muted); letter-spacing: 0.02em; background: var(--raised);
+}
+.clients-table tbody tr:last-child td { border-bottom: none; }
+.clients-expand {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0; color: inherit; cursor: pointer;
+  font: inherit; text-align: left;
+}
+.clients-expand:hover strong { color: var(--accent-hover); }
+.clients-mono {
+  font-family: var(--font-code); font-size: var(--text-caption);
+  word-break: break-all;
+}
+.clients-muted { color: var(--muted); font-size: var(--text-label); }
+.clients-manage {
+  font-size: var(--text-label); color: var(--accent-hover); text-decoration: none;
+}
+.clients-manage:hover { text-decoration: underline; }
+.clients-detail {
+  padding: 12px 16px 16px; border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--raised) 60%, transparent);
+}
+.clients-detail h3 {
+  font-size: var(--text-body); margin: 0 0 10px; font-weight: var(--weight-semibold);
+}
+.clients-dl {
+  display: grid; grid-template-columns: minmax(100px, 140px) 1fr;
+  gap: 8px 12px; margin: 0; font-size: var(--text-label);
+}
+.clients-dl dt { color: var(--muted); margin: 0; }
+.clients-dl dd { margin: 0; }
+.clients-paths, .clients-notes {
+  margin: 0; padding-left: 1.1em;
+}
+.clients-paths li, .clients-notes li { margin: 2px 0; }
+.clients-footer-hint {
+  color: var(--muted); font-size: var(--text-label); margin-top: 14px;
+}
+.clients-footer-hint a { color: var(--accent-hover); }

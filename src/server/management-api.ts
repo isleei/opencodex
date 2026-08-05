@@ -62,6 +62,7 @@ import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
+import { handleClientsRoutes } from "./management/clients-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
@@ -133,6 +134,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       ?? (await handleProviderRoutes(ctx))
       ?? (await handleModelRoutes(ctx))
       ?? (await handleAgentSettingsRoutes(ctx))
+      ?? (await handleClientsRoutes(ctx))
       ?? (await handleOauthAccountRoutes(ctx))
       ?? (await handleComboRoutes(ctx))
       ?? (await handleSystemRoutes(ctx))

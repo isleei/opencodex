@@ -226,6 +226,16 @@ const helpEntries: Record<string, HelpEntry> = {
       "Claude Code settings: ocx claude config <status|set> ...",
     ],
   },
+  pi: {
+    usage: "ocx pi [status|apply|remove|settings|packages|pi-args...]",
+    summary: "Manage Pi models/settings/packages, or launch Pi wired to the proxy.",
+    details: [
+      "Management: status, apply (providers.opencodex), remove, settings, packages.",
+      "Launch: any other args are forwarded to the real `pi` binary after a best-effort apply.",
+      "Only providers.opencodex is written; other Pi providers and settings keys are preserved.",
+      "Package install/remove shells out to `pi install` / `pi remove` (full system access).",
+    ],
+  },
   opencode: {
     usage: "ocx opencode [opencode args...]",
     summary: "Launch opencode wired to the proxy (runtime provider config).",
@@ -316,6 +326,7 @@ Usage:
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
+  ocx pi [args|subcommand]    Manage or launch Pi (models, settings, packages)
   ocx help [command]          Show help
   ocx --version | -v          Print version
 
