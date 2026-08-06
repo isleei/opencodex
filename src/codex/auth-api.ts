@@ -197,7 +197,7 @@ function poolAccountDto(
   const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
   return {
     id: account.id,
-    email: account.email,
+    email: maskEmail(account.email) ?? account.email,
     ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(account.plan !== undefined ? { plan: account.plan } : {}),
     ...(account.logLabel !== undefined ? { logLabel: account.logLabel } : {}),

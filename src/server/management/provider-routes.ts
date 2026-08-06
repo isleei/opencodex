@@ -524,7 +524,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
               ? "upstream /models network error"
               : "provider model discovery failed";
       // Do not rewrite providers[name].models from a failed probe — keep the last good seed.
-      await refreshCodexCatalogBestEffort();
+      await convergeCodexCatalog();
       return jsonResponse({
         ok: false,
         provider: name,
@@ -562,7 +562,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       persisted = true;
     }
 
-    await refreshCodexCatalogBestEffort();
+    await convergeCodexCatalog();
     return jsonResponse({
       ok: true,
       provider: name,
