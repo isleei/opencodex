@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   appendUsageEntry,
   currentUsageLogRevision,
+  normalizeUsageEntryForTest,
   readRecentUsageEntries,
   readUsageEntries,
   readUsageEntriesForManagement,
@@ -17,6 +18,7 @@ import {
   usageTotalTokens,
   usageReadCacheStatsForTests,
   usageLogRevisionKey,
+  type PersistedUsageEntry,
 } from "../src/usage/log";
 
 let testDir = "";
@@ -36,6 +38,32 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("persists the rate-limit-429 recovery kind on attempts", () => {
+    const entry: PersistedUsageEntry = {
+      requestId: "ocx-ratelimit-kind",
+      timestamp: 1,
+      provider: "blsc",
+      model: "blsc/DeepSeek-V4-Flash",
+      status: 429,
+      durationMs: 4,
+      usageStatus: "reported",
+      attempts: [{
+        ordinal: 1,
+        provider: "blsc",
+        model: "blsc/DeepSeek-V4-Flash",
+        adapter: "openai-chat",
+        status: 429,
+        durationMs: 4,
+        sendCount: 2,
+        recoveryKinds: ["rate-limit-429", "rate-limit-429"],
+        usageStatus: "reported",
+      }],
+    };
+    appendUsageEntry(entry);
+    expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429"]);
+  });
+
+  /** Build one minimal persisted-usage JSONL line for the given request id. */
   const persistedLine = (requestId: string) => JSON.stringify({
     requestId,
     timestamp: 1,
@@ -309,6 +337,54 @@ describe("usage log", () => {
     expect(attempt).not.toHaveProperty("effectiveEffort");
     expect(attempt).not.toHaveProperty("reasoningWireField");
     expect(attempt).not.toHaveProperty("reasoningWireValue");
+  });
+
+  test("keeps boolean reasoning values only for reasoning.enabled", () => {
+    const base = {
+      requestId: "ocx-boolean-reasoning",
+      timestamp: 1,
+      provider: "combo",
+      model: "combo/free",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "unreported",
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+      }],
+    } as const;
+    const mismatched = normalizeUsageEntryForTest({
+      ...base,
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: true,
+      attempts: [{
+        ...base.attempts[0],
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: true,
+      }],
+    });
+    const valid = normalizeUsageEntryForTest({
+      ...base,
+      reasoningWireField: "reasoning.enabled",
+      reasoningWireValue: false,
+      attempts: [{
+        ...base.attempts[0],
+        reasoningWireField: "reasoning.enabled",
+        reasoningWireValue: false,
+      }],
+    });
+
+    expect(mismatched).not.toHaveProperty("reasoningWireValue");
+    expect(mismatched.attempts?.[0]).not.toHaveProperty("reasoningWireValue");
+    expect(valid.reasoningWireValue).toBe(false);
+    expect(valid.attempts?.[0]?.reasoningWireValue).toBe(false);
   });
 
   test("drops only malformed persisted attempts while preserving valid siblings", () => {

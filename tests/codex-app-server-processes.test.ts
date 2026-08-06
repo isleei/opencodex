@@ -363,12 +363,18 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
       cliSource.indexOf('case "sync-cache":'),
       cliSource.indexOf('case "gui":'),
     );
-    expect(syncCacheCase).toContain("invalidateCodexModelsCache()");
-    expect(syncCacheCase).toContain("if (invalidateCodexModelsCache())");
+    // The cache write now happens under the catalog serialization lock K, so the
+    // gate reads the permitted writer's outcome instead of a bare boolean call.
+    // The property under test is unchanged: app-servers are touched only after a
+    // write actually landed, never on a refused/failed serialization attempt.
+    expect(syncCacheCase).toContain("withCatalogWriteSerialization");
+    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome)");
+    const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
+    expect(syncCacheCase).toContain(gate);
     expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"))
+    expect(syncCacheCase.indexOf(gate))
       .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
-    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"));
+    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf(gate));
     expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
@@ -457,13 +463,26 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         expect(child.pid).toBeGreaterThan(1);
         // Brief settle so Win32_Process can observe the child. A loaded Windows
         // runner can also exhaust one CIM enumeration deadline, so tolerate one
-        // transient empty result while keeping the production timeout unchanged.
+        // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
+        // design) while keeping the production timeout unchanged.
         Bun.sleepSync(250);
-        let snapshots = listWindowsSnapshots();
+        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
+          try {
+            return listWindowsSnapshots();
+          } catch {
+            return undefined; // transient CIM deadline on a contended runner
+          }
+        };
+        let snapshots = enumerate() ?? [];
         let match = snapshots.find(snapshot => snapshot.pid === child.pid);
         if (!match) {
           Bun.sleepSync(250);
-          snapshots = listWindowsSnapshots();
+          snapshots = enumerate() ?? [];
+          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        }
+        if (!match) {
+          Bun.sleepSync(1_000);
+          snapshots = enumerate() ?? [];
           match = snapshots.find(snapshot => snapshot.pid === child.pid);
         }
         expect(match).toBeDefined();

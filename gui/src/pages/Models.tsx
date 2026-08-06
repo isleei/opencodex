@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconShuffle } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconShuffle, IconCheck, IconAlert } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -81,12 +81,32 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const needsDefaultCollapseRef = useRef(initialCollapsed === null);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
+  // Feedback generation: a repeated identical message (same success string, same validation
+  // error) must still re-arm the toast timer. Clearing `status` alone is not enough — a
+  // second identical value bails out of React's state diff, so the old timer would dismiss
+  // the new toast early. Every publish bumps the generation.
+  const [feedbackGen, setFeedbackGen] = useState(0);
+  const publishFeedback = (nextOk: boolean, message: string) => {
+    setOk(nextOk);
+    setStatus(message);
+    setFeedbackGen(g => g + 1);
+  };
+  // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
+  // the workspace below (the old inline Notice pushed the whole model grid down by its
+  // height on every apply). The timer itself just clears the status again.
+  useEffect(() => {
+    if (!status) return;
+    const holdMs = ok ? 6000 : 8000;
+    const timer = setTimeout(() => setStatus(""), holdMs);
+    return () => clearTimeout(timer);
+  }, [status, ok, feedbackGen]);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
+  const [v2Loading, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
   const v2BusyRef = useRef(false);
@@ -178,6 +198,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
       });
     } catch {
       setV2(null); // old server / network: hide the section instead of guessing
+    } finally {
+      setV2Loading(false);
     }
   }, [apiBase]);
 
@@ -427,7 +449,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const applyCustomCap = () => {
     const value = Number(customCap.replace(/[_,\s]/g, ""));
-    if (!Number.isFinite(value) || value <= 0) { setOk(false); setStatus(t("models.capSaveFailed")); return; }
+    if (!Number.isFinite(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
     setShowCustom(false);
     setGlobalCap(value);
   };
@@ -493,7 +515,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
     // value or a double click can never double-write config.toml.
     if (!v2 || v2BusyRef.current) return;
-    if (!Number.isInteger(value) || value < 1) { setOk(false); setStatus(t("models.v2ThreadsInvalid")); return; }
+    if (!Number.isInteger(value) || value < 1) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
     if (v2.maxConcurrentThreadsPerSession === value) return;
     setV2Busy(true);
     v2BusyRef.current = true;
@@ -578,8 +600,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       try {
         await readJsonOrThrow(r, t("models.customSaveFailed"));
         setCustomModalOpen(false);
-        setOk(true);
-        setStatus(t("models.customAdded"));
+        publishFeedback(true, t("models.customAdded"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
@@ -603,8 +624,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       try {
         await readJsonOrThrow(r, t("models.customSaveFailed"));
         setCustomModalOpen(false);
-        setOk(true);
-        setStatus(t("models.customUpdated"));
+        publishFeedback(true, t("models.customUpdated"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
@@ -620,16 +640,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
     try {
       const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok) {
-        setOk(true);
-        setStatus(t("models.customDeleted"));
+        publishFeedback(true, t("models.customDeleted"));
         await load(true);
       } else {
-        setOk(false);
-        setStatus(t("models.customSaveFailed"));
+        publishFeedback(false, t("models.customSaveFailed"));
       }
     } catch {
-      setOk(false);
-      setStatus(t("models.networkError"));
+      publishFeedback(false, t("models.networkError"));
     }
   };
 
@@ -898,7 +915,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           </div>
         </div>
 
-        {v2 && (
+        {(v2Loading || v2) && (
           <div className="models-v2-mode-row row">
             <span className="muted text-control">{t("models.v2Label")}</span>
             <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
@@ -907,10 +924,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   key={mode}
                   type="button"
                   role="radio"
-                  aria-checked={(v2.multiAgentMode ?? "default") === mode}
-                  className={`btn btn-sm${(v2.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
-                  disabled={v2Busy}
+                  aria-checked={(v2?.multiAgentMode ?? "default") === mode}
+                  className={`btn btn-sm${(v2?.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
+                  style={{ background: (v2?.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2?.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
+                  disabled={!v2 || v2Busy}
                   onClick={() => void setMultiAgentMode(mode)}
                 >
                   {t(`models.v2Mode_${mode}` as TKey)}
@@ -921,6 +938,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
               type="button"
               className="btn btn-ghost btn-sm"
               style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
+              disabled={!v2}
               onClick={() => setV2HelpOpen(true)}
               aria-label={t("models.v2Label")}
               aria-haspopup="dialog"
@@ -1037,19 +1055,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const combosBlock = (
     <>
-      {/* Pending strut matches the empty-card chrome so a late /api/combos cannot insert a row. */}
+      {/* Silent height strut: reserves the empty-card slot so a late /api/combos
+          cannot insert a row, without a bordered "Combos · Loading…" placeholder. */}
       {combos === null && !combosError && (
-        <div className="card models-combos-card" aria-busy="true">
-          <div className="row models-combos-empty-head">
-            <div className="row models-field-row" style={{ minWidth: 0 }}>
-              <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
-              <strong>{t("nav.combos")}</strong>
-              <span className="muted text-label">{t("common.loading")}</span>
-            </div>
-            <a className="btn btn-sm" href="#combos" style={{ flexShrink: 0, visibility: "hidden" }} tabIndex={-1} aria-hidden="true">
-              {t("models.combosSetup")}
-            </a>
-          </div>
+        <div className="models-combos-card models-combos-card--pending" aria-busy="true">
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {t("common.loading")}
+          </span>
         </div>
       )}
       {combos === null && combosError && (
@@ -1345,7 +1357,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
         </div>
       </div>
       <p className="page-sub">{t("models.subtitle")}</p>
-      {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
+      {status && (
+        <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
+          {ok ? <IconCheck /> : <IconAlert />}
+          <span>{status}</span>
+        </div>
+      )}
       {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
       {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
       <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>

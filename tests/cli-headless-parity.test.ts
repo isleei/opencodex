@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +6,7 @@ import { handleAccessCommand } from "../src/cli/access";
 import { handleAgentCommand } from "../src/cli/agent";
 import { handleComboCommand } from "../src/cli/combo";
 import { handleConfigCommand } from "../src/cli/config-command";
-import { handleGrokCommand } from "../src/cli/integrations";
+import { handleClientIntegrationCommand, handleGrokCommand } from "../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
 
@@ -72,6 +72,14 @@ describe("headless GUI parity CLI", () => {
       ["/api/model", "ocx models"],
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
+      ["/api/client-integrations", "ocx integration client"],
+      // GUI-only for now: the overview card switches for Claude Code and Grok.
+      // Their effect is already reachable from the CLI by other names —
+      // `ocx grok apply` regenerates the fence and `ocx stop` strips it, and
+      // the Claude flag flips through `ocx claude config` — so a dedicated
+      // `ocx integration native` verb would duplicate existing commands rather
+      // than add a capability. Listed so the sweep stays exhaustive.
+      ["/api/native-integrations", "(none — GUI-only)"],
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],
@@ -109,6 +117,72 @@ describe("headless GUI parity CLI", () => {
       method: "PATCH",
       body: { baseUrl: "https://example.test/v1", apiKeyTransport: "bearer", disabled: true, liveModels: true },
     }]);
+  });
+
+  test("provider edit --headers sends the parsed block and - clears it", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", [
+      "agw", "--headers", '{"x-app":"cli","anthropic-version":"2023-06-01"}', "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers?name=agw",
+      method: "PATCH",
+      body: { headers: { "x-app": "cli", "anthropic-version": "2023-06-01" } },
+    }]);
+
+    const clearRuntime = fakeRuntime();
+    const clearCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "-", "--json"], clearRuntime.deps);
+    expect(clearCode).toBe(0);
+    expect(clearRuntime.requests[0]?.body).toEqual({ headers: null });
+  });
+
+  test("provider edit rejects malformed --headers JSON without a request", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "{not json"], runtime.deps);
+    expect(code).toBe(2);
+    expect(runtime.requests).toEqual([]);
+
+    const arrayRuntime = fakeRuntime();
+    const arrayCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", '["x-app"]'], arrayRuntime.deps);
+    expect(arrayCode).toBe(2);
+    expect(arrayRuntime.requests).toEqual([]);
+  });
+
+  test("provider edit usage errors redact --headers values", async () => {
+    const errorSpy = spyOn(console, "error");
+    try {
+      // `--headers={...}` is not consumed by takeOption, so the value lands in the
+      // leftovers rejectArgs reports. Header values can carry tokens, so they must
+      // never be echoed to stderr.
+      const runtime = fakeRuntime();
+      const code = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers={\"x-app\":\"cli\",\"X-Token\":\"sk-leak-value\"}"],
+        runtime.deps,
+      );
+      expect(code).toBe(2);
+      expect(runtime.requests).toEqual([]);
+      const stderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(stderr).toContain("--headers=<redacted>");
+      expect(stderr).not.toContain("sk-leak-value");
+      expect(stderr).not.toContain("X-Token");
+
+      errorSpy.mockClear();
+      // Repeating the option leaves the second flag AND its value in the leftovers.
+      const repeatRuntime = fakeRuntime();
+      const repeatCode = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers", "{\"X-Token\":\"sk-leak-value\"}", "--headers", "{\"X-Other\":\"v\"}"],
+        repeatRuntime.deps,
+      );
+      expect(repeatCode).toBe(2);
+      const repeatStderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(repeatStderr).toContain("--headers <redacted>");
+      expect(repeatStderr).not.toContain("sk-leak-value");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test("provider test treats a static catalog as neutral", async () => {
@@ -175,6 +249,42 @@ describe("headless GUI parity CLI", () => {
     });
     expect(await handleGrokCommand(["include", "a", "--json"], runtime.deps)).toBe(0);
     expect(runtime.requests[1]).toEqual({ path: "/api/grok/selection", method: "PUT", body: { excluded: ["b"] } });
+  });
+
+  test("client integration toggles hit the exact management routes", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(["disable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
+    expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
+      ["/api/client-integrations/hermes", "PUT", { enabled: true }],
+      ["/api/client-integrations/hermes", "PUT", { enabled: false }],
+    ]);
+  });
+
+  test("restore refuses to guess about drift, and forwards the confirmation when given", async () => {
+    /*
+     * Replacing edits a user made after the snapshot is their decision, so the
+     * flag has to travel exactly as typed. Defaulting it to true would make
+     * the headless path quietly more destructive than the GUI.
+     */
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["restore", "--op", "op-1", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(
+      ["restore", "--op", "op-1", "--confirm-drift", "--json"],
+      runtime.deps,
+    )).toBe(0);
+    expect(runtime.requests.map(row => row.body)).toEqual([
+      { opId: "op-1", confirmDrift: false },
+      { opId: "op-1", confirmDrift: true },
+    ]);
+  });
+
+  test("a client integration command without its required target fails instead of guessing", async () => {
+    const runtime = fakeRuntime();
+    // No `--client`: picking one for the user would write a config they never named.
+    expect(await handleClientIntegrationCommand(["enable", "--json"], runtime.deps)).not.toBe(0);
+    expect(await handleClientIntegrationCommand(["restore", "--json"], runtime.deps)).not.toBe(0);
+    expect(runtime.requests).toEqual([]);
   });
 
   test("config set validates the complete candidate before the atomic write", async () => {

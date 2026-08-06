@@ -24,6 +24,26 @@ Auth page can restore it: absent rows are created from the canonical preset, dis
 rows are re-enabled without replacing saved mode or model settings, and noncanonical `openai`
 rows are not offered that recovery path.
 
+### Providers overview pool capacity
+
+For Codex login in Pool mode, the Providers overview shows a configured-weight estimate of the
+pool's used capacity rather than presenting one arbitrary account as the provider total. The same
+row also shows the current effective account's raw quota percentage, so you can distinguish the
+pool estimate from the account that a new request would use.
+
+When reset information is available, the overview shows the next reset time and the capacity that
+reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** means one or more pool
+accounts could not safely contribute to the estimate, for example because their plan or quota is
+unknown, their reading is stale, or the account is paused or needs reauthentication.
+
+A **partial window coverage** warning means some included accounts reported one quota window but
+not another. The overview keeps those windows separate and marks each affected window incomplete
+instead of treating the missing reading as usage for that window.
+
+This estimate is display-only. It does not change account selection, session affinity, automatic
+switching, cooldowns, or any other routing decision. Use the [Codex Auth account pool](/guides/web-dashboard/#codex-auth-and-account-pools)
+for the individual account state and routing controls.
+
 Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
@@ -38,6 +58,12 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
 | `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+
+The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
+providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
+credentials must never be replayed on the same token, and local runtimes have no remote key to
+preserve. It is opt-in: when the option is absent the feature is off; object presence enables
+it unless `enabled: false`.
 
 ## 1. ChatGPT login (forward / passthrough)
 
@@ -190,15 +216,31 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 66 built-in presets: 55 key-based, seven OAuth, three local, and the default
+opencodex ships 69 built-in presets: 58 key-based, seven OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it. Notable entries:
+validates the key, and stores it; validation is provider-specific, and Command Code's public
+catalog reports keys as unverifiable. Notable entries:
+
+**ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
+and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
+[Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
+intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
+full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
+weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
+higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
+
+**Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
+(OpenRouter-style ids like `anthropic/claude-sonnet-4-6`). Cline's promotional free models are only
+available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
+free-experimentation model.
 
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -210,6 +252,7 @@ validates the key, and stores it. Notable entries:
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -258,11 +301,43 @@ slash-containing native model ids, and caps live discovery at 256 KiB and 256 ra
 serverless text and vision-language chat only; Hyperbolic's separate image, audio, and GPU endpoints
 are out of scope. Create keys at [Hyperbolic](https://app.hyperbolic.ai).
 
+**Command Code discovery.** The preset reads Command Code's public `/provider/v1/models` list from
+the fixed Provider API host, preserves provider-native ids, and caps discovery at 256 KiB and 256 raw
+rows. The model catalog is unauthenticated, so the CLI login flow reports the key as unverifiable
+instead of a false positive. Chat requests use the configured Bearer key; API access requires the
+Provider plan, and CLI auth bridging for Go/Pro subscriptions is not yet available. Create keys at
+[Command Code Studio](https://commandcode.ai/studio/).
+
 > **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key
 > with **Call Model APIs** access for shared/production use. Dedicated Truss `predict` endpoints use different
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
+
+### A6API credit quota
+
+A custom `openai-chat` provider using `authMode: "key"` and the canonical
+`https://api.a6api.com` or `https://api.a6api.com/v1` base URL receives an A6API credit meter in
+the dashboard and from `ocx account refresh <provider>`. The provider name is arbitrary; detection
+uses the canonical HTTPS endpoint. The meter converts A6API token units into USD using the account's
+hard credit limit and displays the percentage consumed plus remaining credit. Token expiration is
+not shown as a quota reset because expiration does not imply that credit replenishes.
+
+```json
+{
+  "providers": {
+    "my-a6": {
+      "adapter": "openai-chat",
+      "authMode": "key",
+      "baseUrl": "https://api.a6api.com/v1",
+      "apiKey": "${A6API_API_KEY}"
+    }
+  }
+}
+```
+
+Quota probes send only the active key to the canonical A6API host and reject redirects. Malformed,
+negative, or internally inconsistent billing totals produce no report rather than a misleading bar.
 
 > **Tencent Cloud Coding Plan usage restriction:** Tencent documents this subscription for
 > interactive coding tools only. General API automation, custom application backends, and
@@ -313,6 +388,15 @@ is not supported directly.
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
+
+Copilot fronts a mixed-wire catalog: its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`,
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) rejects
+`/chat/completions` for agent traffic, so opencodex routes those models over the
+Responses API by built-in default while every other Copilot model stays on chat
+completions. The precedence is: hard wire pin → your explicit
+[`modelAdapters`](/reference/configuration/providers/) entry → registry default →
+provider-wide adapter. To opt a model without a built-in default (for example
+`gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
 
 Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static

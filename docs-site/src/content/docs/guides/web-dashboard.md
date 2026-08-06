@@ -29,6 +29,11 @@ they expire or the proxy restarts. Only a dashboard bound to a non-loopback host
 the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
 `~/.opencodex/admin-api-token` file).
 
+When a remote dashboard needs that credential, it presents a standard password form so a browser
+password manager can offer to save and autofill it. The dashboard itself still keeps the token only
+in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
+the browser or password manager's decision.
+
 ## What you can do
 
 | Area | What it does |
@@ -113,6 +118,11 @@ The **Codex Auth** page manages the native ChatGPT/Codex route:
 - **Refresh quotas** re-reads account usage immediately so routing and the account cards use the same
   values.
 - Pool request logs use opaque labels such as `p3fa91c`, never account emails.
+
+The Providers overview separately summarizes Pool-mode usage as a display-only weighted capacity
+estimate, alongside the effective account's raw quota and the next capacity recovery. See
+[Providers overview pool capacity](/guides/providers/#providers-overview-pool-capacity) for the
+visible fields, incomplete-coverage meaning, and routing boundary.
 
 ## Starring is yours to decide, not an agent's
 

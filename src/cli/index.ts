@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
-import { currentExternalCodexModelProvider, restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
+import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
-import { restoreLegacyOpenaiHistory } from "../codex/history-provider";
+import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "../codex/history-job";
 import { reconcileJournal } from "../codex/journal";
 import {
   codexAutoStartEnabled,
@@ -41,9 +41,11 @@ import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
+import { shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { removeOwnedConfigState } from "../lib/config-ownership";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -315,7 +317,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   installShellHook();
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
-  await syncModelsToCodex(port).catch(() => {});
+  await syncCodexOnStartIfEnabled(port, config);
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
   }
@@ -335,7 +337,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // absent or the bind is non-loopback; removed again by stop/eject/uninstall/shutdown.
   // Deliberately a SIBLING of the Desktop-3P block above: nesting it there meant a catalog
   // failure skipped the fence entirely, even though syncGrokConfig handles that case itself.
-  try {
+  //
+  // Gated on the persisted switch: without this, turning Grok off lasted exactly
+  // one restart, because the toggle removed the fence and start wrote it back.
+  if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
     const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
@@ -385,7 +390,7 @@ async function handleEnsure() {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: { ...process.env, OCX_SERVICE: "1" },
+    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
   });
   child.unref();
 
@@ -427,7 +432,7 @@ async function handleTrayProxyStart(): Promise<void> {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...process.env, OCX_SERVICE: "1" },
+        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
       });
       child.unref();
     },
@@ -524,7 +529,7 @@ async function handleStop() {
     }
   }
   if (!ownershipBlocked) {
-    const r = restoreNativeCodex();
+    const r = await restoreNativeCodexAsync();
     if (r.success) console.log(`↩️  ${r.message}`);
     else {
       stopFailed = true;
@@ -586,8 +591,8 @@ async function handleUninstall() {
     });
   }
 
-  await runStep("native Codex restored", () => {
-    const r = restoreNativeCodex();
+  await runStep("native Codex restored", async () => {
+    const r = await restoreNativeCodexAsync();
     if (!r.success) throw new Error(r.message);
   });
 
@@ -659,7 +664,14 @@ async function handleStatus() {
   console.log(`   Health: ${status.healthLabel}`);
   if (!(status.json.proxy.pid || status.json.proxy.health.ok)) {
     console.log("   ↳ Not running — Codex/Claude requests will fail with connection errors.");
-    console.log("     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");
+    // The service summary a few lines below already tells a registered-but-not-serving
+    // user to repair. Printing "install the persistent service" unconditionally
+    // contradicted it in the same report, and install re-registers: UAC on Windows and a
+    // possible WinSW-to-scheduler switch for someone who already has a service.
+    const installed = status.json.startup.serviceInstalled && !status.json.startup.serviceConflict;
+    console.log(installed
+      ? "     Restart with 'ocx start', or refresh the installed service: 'ocx service repair'."
+      : "     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");
   }
   console.log(`   Dashboard: ${status.json.dashboard.url}`);
   console.log(`   Config: ${status.json.paths.config}`);
@@ -707,13 +719,22 @@ async function handleStatus() {
   }
 }
 
-function handleRecoverHistory() {
+async function handleRecoverHistory() {
   if (args[1] !== "--legacy-openai") {
     console.error("Usage: ocx recover-history --legacy-openai");
     console.error("Only use this if an older syncResumeHistory build already remapped OpenAI Codex App history to opencodex before backup support existed.");
     process.exit(1);
   }
-  const r = restoreLegacyOpenaiHistory();
+  // Manifest-independent legacy ejection, serialized like every other history
+  // mutation. It is a separate operation from generic restore precisely because
+  // it must not read, consume or replace the backup manifest.
+  const outcome = await runCodexHistoryJob({
+    ...resolveCodexHistoryJobTarget(),
+    operation: "recover-legacy-openai",
+  });
+  const r = outcome.kind === "converged"
+    ? { rows: outcome.rows, files: outcome.files, failed: undefined }
+    : { rows: 0, files: 0, failed: true as const };
   if (r.failed) {
     console.error(
       "⚠️  Recovery SKIPPED: the Codex history DB is locked (Codex app/IDE open?). Close it and rerun this command.",
@@ -764,7 +785,7 @@ switch (command) {
     }
     let r: { success: boolean; message: string };
     try {
-      r = restoreNativeCodex();
+      r = await restoreNativeCodexAsync();
     } catch (err) {
       r = { success: false, message: err instanceof Error ? err.message : String(err) };
     }
@@ -789,7 +810,7 @@ switch (command) {
     break;
   }
   case "recover-history":
-    handleRecoverHistory();
+    await handleRecoverHistory();
     break;
   case "uninstall":
   case "remove":
@@ -847,9 +868,14 @@ switch (command) {
   }
   case "sync-cache": {
     const restartCodex = args.slice(1).includes("--restart-codex");
-    const { invalidateCodexModelsCache } = await import("../codex/catalog");
+    const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
+    const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
+    const { getCodexHome } = await import("../codex/paths");
+    const owningCodexHome = getCodexHome();
+    const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
+      invalidateCodexModelsCacheWithPermit(permit, owningCodexHome));
     // Only warn/restart when models_cache was actually rewritten from a readable catalog.
-    if (invalidateCodexModelsCache()) {
+    if (invalidated.kind === "completed" && invalidated.value) {
       const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }
@@ -867,7 +893,7 @@ switch (command) {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: process.env,
+        env: withProcessRuntimeProvenance(process.env),
       });
       child.unref();
       live = await waitForProxy();
@@ -999,13 +1025,18 @@ switch (command) {
     break;
   }
   case "route": {
-    if (args[1] !== "combo") {
-      console.error("Usage: ocx route combo <subcommand>");
+    if (args[1] !== "combo" && args[1] !== "policy") {
+      console.error("Usage: ocx route <combo|policy> <subcommand>");
       process.exitCode = 2;
       break;
     }
-    const { handleComboCommand } = await import("./combo");
-    process.exitCode = await handleComboCommand(args.slice(2));
+    if (args[1] === "combo") {
+      const { handleComboCommand } = await import("./combo");
+      process.exitCode = await handleComboCommand(args.slice(2));
+    } else {
+      const { handleRoutePolicyCommand } = await import("./route-policy");
+      process.exitCode = await handleRoutePolicyCommand(args.slice(2));
+    }
     break;
   }
   case "agent": {
@@ -1054,8 +1085,11 @@ switch (command) {
     } else if (integration === "claude") {
       const { handleClaudeConfigCommand } = await import("./integrations");
       process.exitCode = await handleClaudeConfigCommand(args.slice(2));
+    } else if (integration === "client") {
+      const { handleClientIntegrationCommand } = await import("./integrations");
+      process.exitCode = await handleClientIntegrationCommand(args.slice(2));
     } else {
-      console.error("Usage: ocx integration <claude|grok> <subcommand>");
+      console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
       process.exitCode = 2;
     }
     break;

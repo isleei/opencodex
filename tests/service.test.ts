@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -76,7 +76,7 @@ describe("service listen-port bake", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     saveConfig({ port: 13337, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" });
     expect(script).toContain("start --port 13337");
     expect(buildPlist()).toContain("start --port 13337");
     expect(buildUnit()).toContain("start --port 13337");
@@ -495,6 +495,7 @@ describe("Windows service task", () => {
   test("escapes service executable paths through variables", () => {
     const script = buildWindowsServiceScript({
       bun: "C:\\Bun&Dir\\100%bun^\\bun.exe",
+      bunRuntimeSource: "bundled",
       cli: "C:\\OpenCodex&Dir\\cli.ts",
     });
 
@@ -505,7 +506,7 @@ describe("Windows service task", () => {
   });
 
   test("switches the wrapper console to UTF-8 and sleeps via ping (timeout dies without console stdin)", () => {
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" });
 
     expect(script).toContain("chcp 65001 >nul");
     expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "OCX_SERVICE=1"'));
@@ -521,6 +522,7 @@ describe("Windows service task", () => {
       process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
       const script = buildWindowsServiceScript({
         bun: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
+        bunRuntimeSource: "bundled",
         cli: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
       });
 
@@ -545,6 +547,7 @@ describe("Windows service task", () => {
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const script = buildWindowsServiceScript({
         bun: "C:\\OpenCodex\\bun.exe",
+        bunRuntimeSource: "bundled",
         cli: "C:\\OpenCodex\\cli.ts",
       });
 
@@ -573,6 +576,41 @@ describe("Windows service task", () => {
 });
 
 describe("launchd service plist", () => {
+  test("every durable launcher stamps the Bun provenance paired with the binary it baked (#848)", () => {
+    const inherited = process.env.OPENCODEX_BUN_PATH;
+    const overrideBun = join(TEST_DIR, "provenance-override-bun.exe");
+    mkdirSync(TEST_DIR, { recursive: true });
+    writeFileSync(overrideBun, "x".repeat(2 * 1024 * 1024));
+    try {
+      // With a valid override active, every launcher must bake THAT binary and
+      // label it `override` — a marker that disagreed with the baked path would be
+      // worse than no marker at all.
+      process.env.OPENCODEX_BUN_PATH = overrideBun;
+      const plist = buildPlist();
+      expect(plist).toContain("<key>OCX_BUN_RUNTIME_SOURCE</key><string>override</string>");
+      expectTextToContainPath(plist, overrideBun);
+
+      const unit = buildUnit();
+      expect(unit).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      expectTextToContainPath(unit, overrideBun);
+
+      const script = buildWindowsServiceScript();
+      expect(script).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
+      expect(script).toContain('echo bun_source="override"');
+
+      // No override: the same three fall back to the bundled/process runtime and say so.
+      delete process.env.OPENCODEX_BUN_PATH;
+      const bundledPlist = buildPlist();
+      expect(bundledPlist).toMatch(/<key>OCX_BUN_RUNTIME_SOURCE<\/key><string>(bundled|process)<\/string>/);
+      expect(bundledPlist).not.toContain(">override<");
+      expect(buildUnit()).toMatch(/Environment="OCX_BUN_RUNTIME_SOURCE=(bundled|process)"/);
+      expect(buildWindowsServiceScript()).toMatch(/set "OCX_BUN_RUNTIME_SOURCE=(bundled|process)"/);
+    } finally {
+      if (inherited === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inherited;
+    }
+  });
+
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -605,9 +643,9 @@ describe("service lifecycle cleanup ordering", () => {
 
     expect(stopCase).toContain("ops.stop();");
     expect(stopCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(stopCase).toContain("restoreNativeCodex();");
+    expect(stopCase).toContain("restoreNativeCodexAsync();");
     expect(stopCase.indexOf("ops.stop();")).toBeLessThan(stopCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodex();"));
+    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodexAsync();"));
   });
 
   test("direct service uninstall kills the tracked proxy before deleting service assets", async () => {
@@ -617,10 +655,10 @@ describe("service lifecycle cleanup ordering", () => {
     expect(uninstallCase).toContain("ops.stop();");
     expect(uninstallCase).toContain("await stopTrackedProxyForServiceCommand();");
     expect(uninstallCase).toContain("ops.uninstall();");
-    expect(uninstallCase).toContain("restoreNativeCodex();");
+    expect(uninstallCase).toContain("restoreNativeCodexAsync();");
     expect(uninstallCase.indexOf("ops.stop();")).toBeLessThan(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();"));
     expect(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(uninstallCase.indexOf("ops.uninstall();"));
-    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodex();"));
+    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodexAsync();"));
   });
 
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
@@ -944,7 +982,9 @@ describe("launchctl load verification", () => {
       const out = runLaunchctl(["print", "gui/501/x"], {
         run: (() => ({ status: 0, stdout: "  ok  ", stderr: "" })) as never,
       });
-      expect(out).toEqual({ ok: true, stdout: "ok", stderr: "" });
+      // `status` is carried through now: a boolean cannot tell "no such service"
+      // (113) from "no such domain" (112), and only the first is an answer.
+      expect(out).toEqual({ ok: true, stdout: "ok", stderr: "", status: 0 });
     });
 
     /**
@@ -1061,11 +1101,13 @@ describe("launchctl load verification", () => {
       })).toThrow(/bootout/);
     });
 
-    test("throws with the install hint when no job is loaded", () => {
+    test("throws with the repair hint when no job is loaded", () => {
+      // The plist exists (this is an installed service) — reloading it is `repair`,
+      // not a re-registration.
       expect(() => startLaunchd({
         launchctl: failedLoad,
         matches: () => ({ loaded: false, matchesPlist: false }),
-      })).toThrow(/service install/);
+      })).toThrow(/service repair/);
     });
   });
 });
@@ -1076,6 +1118,22 @@ describe("launchctl load verification", () => {
  * a port — so `install`/`start` printed a green checkmark for a service that never
  * served. These helpers answer the second question.
  */
+describe("auth preflight retry command (260804 #970 follow-up)", () => {
+  // Calls the PRODUCTION selector, not a copy of its logic. An earlier version of this
+  // test re-implemented the predicate as a local lambda and would have stayed green with
+  // the fix reverted — a guard that cannot fail is worse than no guard.
+  test("serviceRetryCommand picks the command that can actually succeed", () => {
+    // Registered and healthy enough to refresh in place: repair, no elevation needed.
+    expect(serviceRetryCommand({ installed: true, conflict: false })).toBe("ocx service repair");
+    // Nothing registered: repairService() would refuse, so install is the only option.
+    expect(serviceRetryCommand({ installed: false, conflict: false })).toBe("ocx service install");
+    // Task Scheduler AND WinSW both present: repairService() refuses this outright
+    // (see the conflict guard in repairService), and installWindows removes the native
+    // backend first, so install is the valid recovery.
+    expect(serviceRetryCommand({ installed: true, conflict: true })).toBe("ocx service install");
+  });
+});
+
 describe("service serving confirmation", () => {
   describe("launchdListenPort", () => {
     test("reads the port baked into the plist, not the current config", () => {
@@ -1209,7 +1267,8 @@ describe("service serving confirmation", () => {
         matchesPlist: () => ({ loaded: true, matchesPlist: true }),
       });
       expect(out).toContain("no proxy is answering on port 10100");
-      expect(out).toContain("ocx service install");
+      // Registered but not serving: repair refreshes it without demanding elevation.
+      expect(out).toContain("ocx service repair");
       expect(out).toContain("ocx start");
     });
 
@@ -1333,7 +1392,7 @@ describe("service serving confirmation", () => {
     });
 
     test("reads the port out of a real generated WinSW XML", () => {
-      const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", cli: "C:\\pkg\\src\\cli\\index.ts" });
+      const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\pkg\\src\\cli\\index.ts" });
       expect(winswListenPort({ readXml: () => xml })).toBe(resolveServiceListenPort());
     });
   });

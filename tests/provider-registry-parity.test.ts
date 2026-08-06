@@ -30,8 +30,8 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "deepinfra", "hyperbolic", "baseten", "together", "fireworks", "firepass", "moonshot",
+  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+  "deepseek", "cerebras", "deepinfra", "hyperbolic", "baseten", "commandcode", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
@@ -209,6 +209,15 @@ describe("provider registry parity", () => {
     }
   });
 
+  test("providerConfigSeed preserves the registry auth kind, including local", () => {
+    const local = PROVIDER_REGISTRY.find(entry => entry.authKind === "local");
+    expect(local).toBeDefined();
+    expect(providerConfigSeed(local!).authMode).toBe("local");
+    const key = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek");
+    expect(key).toBeDefined();
+    expect(providerConfigSeed(key!).authMode).toBe("key");
+  });
+
   test("CN provider defaults and context windows match the audited registry refresh", () => {
     const deepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek");
     expect(deepseek).toMatchObject({
@@ -261,29 +270,29 @@ describe("provider registry parity", () => {
       label: "Alibaba Token Plan (Beijing)",
       adapter: "openai-chat",
       baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-      defaultModel: "qwen3.8-max-preview",
+      defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
         "glm-5.2", "deepseek-v4-pro",
       ],
       modelInputModalities: {
-        "qwen3.8-max-preview": ["text", "image"],
+        "qwen3.8-max": ["text", "image"],
         "qwen3.7-max": ["text", "image"],
       },
       modelReasoningEfforts: {
-        "qwen3.8-max-preview": ["low", "medium", "high", "xhigh", "max"],
+        "qwen3.8-max": ["low", "medium", "high", "xhigh", "max"],
       },
       modelContextWindows: {
-        "qwen3.8-max-preview": 983_616,
+        "qwen3.8-max": 983_616,
         "qwen3.7-max": 1_000_000,
         "deepseek-v4-pro": 1_000_000,
       },
       noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
-      preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus"]),
+      preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
-      .toContain("qwen3.8-max-preview");
+      .toContain("qwen3.8-max");
   });
 
   test("aggregator defaults and Neuralwatt seeds match the audited live catalogs", () => {
@@ -607,6 +616,12 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-sonnet-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-fable-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-sonnet-5"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-7"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-6"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-sonnet-4-6"]).toBe(1_000_000);
+    for (const model of OAUTH_PROVIDERS.anthropic.providerConfig.models ?? []) {
+      expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.[model]).toBeGreaterThan(0);
+    }
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
@@ -808,6 +823,37 @@ describe("provider registry parity", () => {
     // The catalog slug flattens the vendor separator, but the routed model id itself is untouched,
     // so the request still reaches BizRouter as `openai/gpt-5.6-sol`.
     expect(entries.find(e => e.slug === "bizrouter/openai-gpt-5.6-sol")).toBeTruthy();
+  });
+
+  test("the Command Code preset seeds a usable live-discovery provider", () => {
+    const commandcode = PROVIDER_REGISTRY.find(entry => entry.id === "commandcode");
+    expect(commandcode).toBeTruthy();
+    expect(commandcode?.adapter).toBe("openai-chat");
+    expect(commandcode?.authKind).toBe("key");
+    expect(commandcode?.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
+    expect(commandcode?.liveModels).toBe(true);
+    // The default must be a real id in the public catalog that live discovery can return.
+    expect(commandcode?.defaultModel).toBe("deepseek/deepseek-v4-flash");
+    // The public /models endpoint is unauthenticated, so key validation must stay honest.
+    expect(commandcode?.apiKeyValidation).toBe("unknown");
+
+    const seed = providerConfigSeed(commandcode!);
+    expect(seed.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
+    expect(seed.adapter).toBe("openai-chat");
+    expect(seed.defaultModel).toBe("deepseek/deepseek-v4-flash");
+    expect(seed).not.toHaveProperty("apiKeyValidation");
+
+    // Vendor-namespaced ids pass through unchanged: rewriting them would break upstream routing.
+    const model = applyProviderConfigHints("commandcode", seed, {
+      id: "deepseek/deepseek-v4-flash",
+      provider: "commandcode",
+    });
+    expect(model.id).toBe("deepseek/deepseek-v4-flash");
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    // The catalog slug flattens the vendor separator, but the routed model id itself is untouched,
+    // so the request still reaches Command Code as `deepseek/deepseek-v4-flash`.
+    expect(entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-flash")).toBeTruthy();
   });
 });
 
