@@ -1826,4 +1826,12 @@ export const ja: Record<TKey, string> = {
   "clients.noNotes": "No notes",
   "clients.exportHint": "Need a generated config template instead? Open the API page export panel.",
   "clients.loading": "Loading client status…",
+  "pws.refreshModels": "Fetch models",
+  "pws.refreshModelsDesc": "Clear the cache and re-fetch this provider’s live model list.",
+  "pws.refreshingModels": "Fetching…",
+  "pws.refreshModelsOk": "Fetched {count} models from provider.",
+  "pws.refreshModelsPartial": "Fetched {count} fallback models; live discovery failed: {error}",
+  "pws.refreshModelsFailed": "Could not fetch models from provider.",
+  "pws.refreshModelsStatic": "Live discovery is off; showing configured models only.",
+  "pws.refreshModelsSaved": "Fetched and saved {count} models to this provider.",
 };

@@ -488,9 +488,18 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   // Per-provider catalog allowlist (issue #52): when a provider has a non-empty selectedModels list,
   // only those ids ship to Codex's catalog / /v1/models. GET returns the CURRENT selection plus the
-  // FULL available set per provider (unfiltered — the picker needs everything to choose from).
+  // FULL available set per provider for the management picker.
+  //
+  // `fetchAllModels` hides media-generation ids (image/video) from the Codex-facing catalog, but the
+  // Providers → Models tab must still list every id the user fetched and saved on the provider
+  // (e.g. grok2api's grok-imagine-*). Merge `providers[name].models` on top so those rows are not
+  // silently dropped after a successful refresh-models persist.
+  //
+  // Cold path: prefer cache/configured seeds so the Providers page paints in milliseconds instead
+  // of waiting on every upstream `/models` (often multi-second). When any live provider still needs
+  // a network probe, kick a background gather and set `refreshing: true` so the GUI can re-poll.
   if (url.pathname === "/api/selected-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = await fetchAllModels(config, { preferCached: true });
     const available: Record<string, string[]> = {};
     for (const m of models) (available[m.provider] ??= []).push(m.id);
     const selected: Record<string, string[]> = {};
@@ -501,8 +510,22 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (Array.isArray(prov.selectedModels) && prov.selectedModels.length > 0) selected[name] = [...prov.selectedModels];
       const liveCount = getProviderLiveModelCount(name);
       if (liveCount !== undefined) liveModelCounts[name] = liveCount;
+      const configured = prov.models;
+      if (!Array.isArray(configured) || configured.length === 0) continue;
+      const bucket = available[name] ?? (available[name] = []);
+      const seen = new Set(bucket);
+      for (const id of configured) {
+        if (typeof id !== "string" || !id || seen.has(id)) continue;
+        seen.add(id);
+        bucket.push(id);
+      }
     }
-    return jsonResponse({ selected, available, liveModelCounts });
+    // Re-check after the local gather: preferCached may have kicked a background flight whose
+    // first probe already filled some caches, but `refreshing` still means "more work in flight
+    // or still needed" for the GUI re-poll loop.
+    const { catalogGatherNeedsLiveRefresh } = await import("../../codex/catalog");
+    const refreshing = catalogGatherNeedsLiveRefresh(config);
+    return jsonResponse({ selected, available, liveModelCounts, refreshing });
   }
   if (url.pathname === "/api/selected-models" && req.method === "PUT") {
     let body: { provider?: unknown; models?: unknown };

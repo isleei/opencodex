@@ -21,7 +21,7 @@ import {
 import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
-import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
+import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseModelsRefreshing, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
@@ -43,7 +43,19 @@ export interface DetailSlotData {
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
   onRetryModels?: () => void;
+  /**
+   * After a force-refresh: optionally paint the returned ids immediately, then reload
+   * /api/selected-models so counts and selection stay authoritative.
+   */
+  onRefreshModels?: (result?: ProviderModelsRefreshResult) => void | Promise<void>;
 }
+
+/** Payload the Models tab hands back after POST /api/providers/refresh-models. */
+export type ProviderModelsRefreshResult = {
+  models: string[];
+  liveModelCount?: number;
+  persisted?: boolean;
+};
 
 const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za" | "pws.sort.freePaid" | "pws.sort.paidFree" | "pws.sort.accountsFirst" }[] = [
   { id: "az", labelKey: "pws.sort.az" },
@@ -131,39 +143,95 @@ export default function ProviderWorkspaceShell({
     return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
   }, [providers, activeAccountNeedsReauth]);
 
+  const applySelectedModelsPayload = useCallback((data: unknown) => {
+    setModelCounts(countAvailableModels(data));
+    setAvailableModels(parseAvailableModels(data));
+    setLiveModelCounts(parseLiveModelCounts(data));
+    setSelectedModels(parseSelectedModels(data));
+    setModelsLoadFailed(false);
+  }, []);
+
+  const loadSelectedModels = useCallback(async (): Promise<boolean> => {
+    setModelsLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/api/selected-models`);
+      const data = await readJsonOrThrow(res);
+      applySelectedModelsPayload(data);
+      return true;
+    } catch {
+      setModelsLoadFailed(true);
+      return false;
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [apiBase, applySelectedModelsPayload]);
+
   const retryModels = useCallback(() => {
     setModelsLoadEpoch(epoch => epoch + 1);
   }, []);
 
+  /**
+   * After POST /api/providers/refresh-models: paint the returned ids immediately (so the chips
+   * do not wait on a second round-trip), then re-read /api/selected-models for selection/counts.
+   */
+  const refreshModelsList = useCallback(async (result?: ProviderModelsRefreshResult) => {
+    if (selectedName && result?.models) {
+      const models = result.models;
+      setAvailableModels(prev => ({ ...prev, [selectedName]: models }));
+      setModelCounts(prev => ({ ...prev, [selectedName]: models.length }));
+      if (typeof result.liveModelCount === "number") {
+        setLiveModelCounts(prev => ({ ...prev, [selectedName]: result.liveModelCount! }));
+      } else if (models.length > 0) {
+        setLiveModelCounts(prev => ({ ...prev, [selectedName]: models.length }));
+      }
+    }
+    await loadSelectedModels();
+  }, [loadSelectedModels, selectedName]);
+
   useEffect(() => {
     // Deferred load (matches Models/Usage/ClaudeCode): avoids synchronous setState
     // inside the effect, per the react-hooks/set-state-in-effect lint gate.
+    //
+    // Cold path returns cache/configured seeds immediately with `refreshing: true` while a
+    // background live gather runs. Re-poll a few times so rail counts fill in without blocking
+    // first paint on multi-second upstream `/models` probes.
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
-      setModelsLoading(true);
-      void (async () => {
-        try {
-          const res = await fetch(`${apiBase}/api/selected-models`);
-          const data = await readJsonOrThrow(res);
-          if (cancelled) return;
-          setModelCounts(countAvailableModels(data));
-          setAvailableModels(parseAvailableModels(data));
-          setLiveModelCounts(parseLiveModelCounts(data));
-          setSelectedModels(parseSelectedModels(data));
-          setModelsLoadFailed(false);
-        } catch {
-          if (cancelled) return;
-          setModelsLoadFailed(true);
-        } finally {
-          if (!cancelled) setModelsLoading(false);
+    let repollTimer: number | null = null;
+    const REPOLL_MS = 1_500;
+    const MAX_REPOLLS = 8;
+    let repolls = 0;
+
+    const loadOnce = async (showLoading: boolean) => {
+      if (showLoading) setModelsLoading(true);
+      try {
+        const res = await fetch(`${apiBase}/api/selected-models`);
+        const data = await readJsonOrThrow(res);
+        if (cancelled) return;
+        applySelectedModelsPayload(data);
+        if (parseModelsRefreshing(data) && repolls < MAX_REPOLLS) {
+          repolls += 1;
+          repollTimer = window.setTimeout(() => {
+            void loadOnce(false);
+          }, REPOLL_MS);
         }
-      })();
+      } catch {
+        if (cancelled) return;
+        // Only mark failed on the first paint; background re-polls keep last-good.
+        if (showLoading) setModelsLoadFailed(true);
+      } finally {
+        if (!cancelled && showLoading) setModelsLoading(false);
+      }
+    };
+
+    const timeout = window.setTimeout(() => {
+      void loadOnce(true);
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
+      if (repollTimer != null) window.clearTimeout(repollTimer);
     };
-  }, [apiBase, modelsRefreshToken, modelsLoadEpoch]);
+  }, [apiBase, modelsRefreshToken, modelsLoadEpoch, applySelectedModelsPayload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -536,6 +604,7 @@ export default function ProviderWorkspaceShell({
             modelsLoading,
             modelsLoadFailed,
             onRetryModels: retryModels,
+            onRefreshModels: refreshModelsList,
           }) ?? (
             <div className="pws-detail-placeholder">
               <h3>{formatProviderDisplayName(selectedItem.name, t)}</h3>

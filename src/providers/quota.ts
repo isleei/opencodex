@@ -1217,8 +1217,24 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const cacheFresh = cache && cache.key === key && now - cache.ts < CACHE_TTL_MS
     && cache.response.reports.every(item => now - item.updatedAt < LAST_GOOD_MAX_AGE_MS);
   if (!forceRefresh && cacheFresh) return cache!.response;
+
+  // Stale-while-revalidate for the Providers overview: when the TTL has expired but last-good
+  // rows are still within LAST_GOOD_MAX_AGE_MS, paint them immediately and refresh in the
+  // background. A cold load with no cache still waits on the probe (nothing to show yet).
   const joinable = inflight.get(key);
-  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
+  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) {
+    if (cache && cache.key === key
+      && cache.response.reports.every(item => now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)) {
+      return cache.response;
+    }
+    return joinable.promise;
+  }
+
+  const staleUsable = !forceRefresh
+    && cache
+    && cache.key === key
+    && cache.response.reports.every(item => now - item.updatedAt < LAST_GOOD_MAX_AGE_MS);
+
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
   if (forceRefresh) invalidationEpoch += 1;
   const epoch = invalidationEpoch;
@@ -1252,6 +1268,13 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
 
   const entry = { epoch, promise };
   inflight.set(key, entry);
+  if (staleUsable) {
+    // Detach: do not await. Callers get last-good now; the flight still fills the cache.
+    void promise.finally(() => {
+      if (inflight.get(key) === entry) inflight.delete(key);
+    });
+    return cache!.response;
+  }
   try {
     return await promise;
   } finally {

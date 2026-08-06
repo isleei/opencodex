@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
+import { IconRefresh } from "../../icons";
 import { Notice, Select } from "../../ui";
 import { CUSTOM_OPTION } from "../../pages/models-shared";
 
@@ -77,6 +78,7 @@ export default function ProviderModels({
   modelsLoadFailed = false,
   needsReauth = false,
   onRetryModels,
+  onRefreshModels,
   onOpenAccounts,
 }: {
   item: WorkspaceItem;
@@ -90,6 +92,16 @@ export default function ProviderModels({
   /** Active OAuth account needs a fresh login before live discovery works. */
   needsReauth?: boolean;
   onRetryModels?: () => void;
+  /**
+   * Force-refresh this provider's live catalog (clears server cache, re-fetches upstream,
+   * persists discovered ids into provider.models, then reloads the workspace model list).
+   * Distinct from onRetryModels which only re-reads the cached management payload.
+   */
+  onRefreshModels?: (result?: {
+    models: string[];
+    liveModelCount?: number;
+    persisted?: boolean;
+  }) => void | Promise<void>;
   onOpenAccounts?: () => void;
 }) {
   const t = useT();
@@ -101,6 +113,8 @@ export default function ProviderModels({
   const [customError, setCustomError] = useState("");
   const [customSuccess, setCustomSuccess] = useState("");
   const [customSaving, setCustomSaving] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit">("add");
@@ -159,6 +173,72 @@ export default function ProviderModels({
     setCustomModelsLoadFailed(false);
     setCustomError("");
     setCustomModelsLoadEpoch(epoch => epoch + 1);
+  };
+
+  const canFetchLive = item.liveModels !== false && item.authMode !== "forward";
+
+  const refreshFromProvider = async () => {
+    if (refreshingModels || !canFetchLive) return;
+    setRefreshingModels(true);
+    setRefreshNote(null);
+    setCustomError("");
+    setCustomSuccess("");
+    try {
+      const response = await fetch(
+        `${apiBase}/api/providers/refresh-models?name=${encodeURIComponent(item.name)}`,
+        { method: "POST" },
+      );
+      const body: unknown = await response.json().catch(() => null);
+      const payload = body && typeof body === "object" ? body as {
+        ok?: unknown;
+        count?: unknown;
+        error?: unknown;
+        source?: unknown;
+        message?: unknown;
+        models?: unknown;
+        liveModelCount?: unknown;
+        persisted?: unknown;
+      } : null;
+      if (!response.ok) {
+        const err = payload && typeof payload.error === "string" ? payload.error : t("pws.refreshModelsFailed");
+        setRefreshNote({ ok: false, text: err });
+        return;
+      }
+      const count = typeof payload?.count === "number" ? payload.count : 0;
+      const models = Array.isArray(payload?.models)
+        ? payload.models.filter((id): id is string => typeof id === "string")
+        : [];
+      const liveModelCount = typeof payload?.liveModelCount === "number" ? payload.liveModelCount : undefined;
+      const persisted = payload?.persisted === true;
+      if (payload?.ok === false) {
+        const err = typeof payload.error === "string" ? payload.error : t("pws.refreshModelsFailed");
+        setRefreshNote({
+          ok: false,
+          text: count > 0
+            ? t("pws.refreshModelsPartial", { count: String(count), error: err })
+            : err,
+        });
+      } else if (payload?.source === "static") {
+        setRefreshNote({
+          ok: true,
+          text: typeof payload.message === "string" ? payload.message : t("pws.refreshModelsStatic"),
+        });
+      } else if (persisted) {
+        setRefreshNote({ ok: true, text: t("pws.refreshModelsSaved", { count: String(count) }) });
+      } else {
+        setRefreshNote({ ok: true, text: t("pws.refreshModelsOk", { count: String(count) }) });
+      }
+      // Paint chips from the response, then re-read selected-models / config so the list sticks.
+      await onRefreshModels?.({
+        models,
+        ...(liveModelCount !== undefined ? { liveModelCount } : {}),
+        ...(persisted ? { persisted: true } : {}),
+      });
+    } catch {
+      setRefreshNote({ ok: false, text: t("pws.refreshModelsFailed") });
+    } finally {
+      setRefreshingModels(false);
+    }
   };
 
   useEffect(() => () => {
@@ -356,6 +436,19 @@ export default function ProviderModels({
           {customModels.length > 0 && (
             <span className="muted text-label">{t("models.customSummary", { count: customModels.length })}</span>
           )}
+          {canFetchLive && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => { void refreshFromProvider(); }}
+              disabled={refreshingModels || modelsLoading || needsReauth}
+              aria-label={t("pws.refreshModels")}
+              title={needsReauth ? t("pws.modelsNeedsReauth") : t("pws.refreshModelsDesc")}
+            >
+              <IconRefresh width={14} />
+              {refreshingModels ? t("pws.refreshingModels") : t("pws.refreshModels")}
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -368,6 +461,11 @@ export default function ProviderModels({
           </button>
         </div>
       </div>
+      {refreshNote && (
+        <p className={refreshNote.ok ? "muted text-label" : "pws-inline-error"} role="status">
+          {refreshNote.text}
+        </p>
+      )}
       {needsReauth && (
         <div className="pws-inline-error" role="status">
           <span>{t("pws.modelsNeedsReauth")}</span>

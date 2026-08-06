@@ -44,6 +44,8 @@ describe("workspace detail derived states (WP090)", () => {
         ["claude-opus-5.1-custom"],
         false,
       )).toEqual(["claude-opus-5", "claude-opus-5.1-custom"]);
+      // Live rows still win as the primary source; configured ids are unioned so a refresh-models
+      // persist (including media-gen ids the Codex catalog hides) stays visible on the tab.
       expect(filterModels(
         ["live-model", "claude-opus-5.1-custom"],
         "ignored-default",
@@ -51,13 +53,13 @@ describe("workspace detail derived states (WP090)", () => {
         ["configured-fallback"],
         ["claude-opus-5.1-custom"],
         true,
-      )).toEqual(["live-model", "claude-opus-5.1-custom"]);
+      )).toEqual(["live-model", "claude-opus-5.1-custom", "configured-fallback"]);
     });
 
     test("a custom id that also appears in live discovery keeps the live catalog authoritative", () => {
       // The provenance regression: subtracting custom ids from `base` used to leave nothing, so an
-      // overlapping id made a real live catalog look custom-only and wrongly resurrected the
-      // configured fallback. The server-reported flag settles it instead.
+      // overlapping id made a real live catalog look custom-only and replaced live with only the
+      // configured fallback. Live rows must remain; configured ids are additive, not a replacement.
       expect(filterModels(
         ["overlap-model"],
         "ignored-default",
@@ -65,7 +67,7 @@ describe("workspace detail derived states (WP090)", () => {
         ["configured-fallback"],
         ["overlap-model"],
         true,
-      )).toEqual(["overlap-model"]);
+      )).toEqual(["overlap-model", "configured-fallback"]);
       // Same inputs, but discovery genuinely returned nothing: the fallback must come back.
       expect(filterModels(
         ["overlap-model"],
@@ -75,6 +77,18 @@ describe("workspace detail derived states (WP090)", () => {
         ["overlap-model"],
         false,
       )).toEqual(["configured-fallback", "overlap-model"]);
+    });
+
+    test("configured media-gen ids stay visible alongside a filtered live chat catalog", () => {
+      // grok2api: live chat rows arrive without imagine-*; refresh-models still saved the full set.
+      expect(filterModels(
+        ["grok-4.5", "grok-chat-fast"],
+        undefined,
+        "",
+        ["grok-4.5", "grok-imagine-image", "grok-imagine-video", "grok-chat-fast"],
+        [],
+        true,
+      )).toEqual(["grok-4.5", "grok-chat-fast", "grok-imagine-image", "grok-imagine-video"]);
     });
   });
 

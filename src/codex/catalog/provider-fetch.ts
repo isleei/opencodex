@@ -667,10 +667,138 @@ export function filterCatalogVisibleModels(
   });
 }
 
+export type GatherRoutedModelsOptions = {
+  comboOmissions?: ComboCatalogOmission[];
+  /**
+   * Management-UI fast path: never block on upstream `/models`.
+   * Serves per-provider TTL/stale/configured seeds immediately and, when any live
+   * provider still needs a network probe, kicks a background full gather so the
+   * next call (or a short GUI re-poll) sees fresh rows. Codex catalog sync and
+   * `/v1/models` must omit this — they need the authoritative live set.
+   */
+  preferCached?: boolean;
+};
+
+/**
+ * Local-only model list for one provider: fresh TTL cache, else stale last-good,
+ * else configured/static seeds. Never performs network I/O.
+ *
+ * `needsLive` is true when a background discovery should still run (no fresh
+ * cache and not in failure cooldown). Cooling-down providers stay on their
+ * fallback so a dead upstream cannot re-stall every management page load.
+ */
+export function peekProviderModelsLocal(
+  name: string,
+  prov: OcxProviderConfig,
+  ttlMs: number,
+  contextCap?: number,
+): { models: CatalogModel[]; needsLive: boolean } {
+  if (prov.authMode === "forward") return { models: [], needsLive: false };
+
+  const seedVertexDefault = prov.adapter === "google"
+    && prov.googleMode === "vertex"
+    && (prov.models?.length ?? 0) === 0
+    && Boolean(prov.defaultModel);
+  const configuredIds = seedVertexDefault && prov.defaultModel
+    ? [prov.defaultModel]
+    : (prov.models ?? []);
+  const configured: CatalogModel[] = configuredIds.map(id => ({
+    id,
+    provider: name,
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
+  }));
+
+  if (prov.liveModels === false) {
+    return { models: configured, needsLive: false };
+  }
+
+  const failedDiscoveryConfigured = configured.length > 0 || !prov.defaultModel || prov.adapter !== "anthropic"
+    ? configured
+    : [{
+      id: prov.defaultModel!,
+      provider: name,
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel!, contextCap),
+    }];
+
+  const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
+  const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
+    vertexDefaultSeed && !models.some(model => model.id === vertexDefaultSeed.id)
+      ? [...models, vertexDefaultSeed]
+      : models
+  );
+
+  const fresh = getFreshCached(name, ttlMs);
+  if (fresh) {
+    return {
+      models: withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)),
+      needsLive: false,
+    };
+  }
+
+  if (isModelsFetchCoolingDown(name)) {
+    const cooling = getStaleCached(name);
+    return {
+      models: cooling
+        ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, cooling, contextCap))
+        : failedDiscoveryConfigured,
+      needsLive: false,
+    };
+  }
+
+  const stale = getStaleCached(name);
+  if (stale) {
+    return {
+      models: withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)),
+      // Stale-while-revalidate: paint last-good now, refresh in the background.
+      needsLive: true,
+    };
+  }
+
+  return { models: failedDiscoveryConfigured, needsLive: true };
+}
+
+/** True when any enabled live provider still needs a network `/models` probe. */
+export function catalogGatherNeedsLiveRefresh(config: OcxConfig): boolean {
+  const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  for (const [name, prov] of Object.entries(config.providers)) {
+    if (prov.disabled === true) continue;
+    const enriched = { ...prov };
+    enrichProviderFromRegistry(name, enriched);
+    const { needsLive } = peekProviderModelsLocal(
+      name,
+      enriched,
+      ttlMs,
+      providerContextCap(config, name),
+    );
+    if (needsLive) return true;
+  }
+  return false;
+}
+
+/**
+ * Fire-and-forget full gather. Shared so management fast paths kick one flight
+ * without awaiting it (joiners still share gatherInflight).
+ */
+export function kickGatherRoutedModelsBackground(config: OcxConfig): void {
+  void gatherRoutedModels(config).catch(() => {
+    /* discovery status / cooldown already recorded per provider */
+  });
+}
+
 export async function gatherRoutedModels(
   config: OcxConfig,
-  options?: { comboOmissions?: ComboCatalogOmission[] },
+  options?: GatherRoutedModelsOptions,
 ): Promise<CatalogModel[]> {
+  if (options?.preferCached) {
+    const local = gatherRoutedModelsLocal(config);
+    if (options.comboOmissions) {
+      options.comboOmissions.length = 0;
+      options.comboOmissions.push(...local.comboOmissions);
+    }
+    if (local.needsLive) kickGatherRoutedModelsBackground(config);
+    return local.models;
+  }
+
   const key = gatherFlightKey(config);
   let promise = gatherInflight.get(key);
   if (!promise) {
@@ -693,28 +821,18 @@ export async function gatherRoutedModels(
   return models;
 }
 
-async function gatherRoutedModelsUncached(
+/**
+ * Assemble the management/catalog model list from already-resolved per-provider
+ * rows (cache, stale, configured, or live). Shared by preferCached and the live
+ * gather so media filtering, combos, and custom models stay one choke point.
+ */
+function assembleRoutedModelsFromProviderLists(
   config: OcxConfig,
-): Promise<GatherFlightResult> {
+  activeProviders: Array<[string, OcxProviderConfig]>,
+  lists: CatalogModel[][],
+): GatherFlightResult {
   // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
   const localOmissions: ComboCatalogOmission[] = [];
-  const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
-  // Persisted provider entries can predate newer registry fields (noVisionModels,
-  // modelInputModalities, ...). The ROUTER merges registry seeds at request time
-  // (routedProviderConfig), so the proxy behaves correctly — the catalog listing must see the
-  // same merged view or its advertisements drift from actual proxy behavior (e.g. a
-  // vision-sidecar model advertised text-only, blocking image attachments app-side).
-  // Enrich a CLONE: hydrated defaults must never leak into the persisted config.
-  const activeProviders = Object.entries(config.providers)
-    .filter(([, prov]) => prov.disabled !== true)
-    .map(([name, prov]): [string, OcxProviderConfig] => {
-      const enriched = { ...prov };
-      enrichProviderFromRegistry(name, enriched);
-      return [name, enriched];
-    });
-  const lists = await Promise.all(
-    activeProviders.map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
-  );
   const apiAugmented = augmentRoutedModelsWithRegistryOpenAiApiRows(lists.flat(), config);
   const all = augmentRoutedModelsWithJawcodeMetadata(apiAugmented, activeProviders.map(([name]) => name), config.providers, config)
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
@@ -812,6 +930,48 @@ async function gatherRoutedModelsUncached(
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
   const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
   return { models: [...deduped, ...customModels], comboOmissions: localOmissions };
+}
+
+function gatherRoutedModelsLocal(config: OcxConfig): GatherFlightResult & { needsLive: boolean } {
+  const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const activeProviders = Object.entries(config.providers)
+    .filter(([, prov]) => prov.disabled !== true)
+    .map(([name, prov]): [string, OcxProviderConfig] => {
+      const enriched = { ...prov };
+      enrichProviderFromRegistry(name, enriched);
+      return [name, enriched];
+    });
+  let needsLive = false;
+  const lists = activeProviders.map(([name, prov]) => {
+    const peeked = peekProviderModelsLocal(name, prov, ttlMs, providerContextCap(config, name));
+    if (peeked.needsLive) needsLive = true;
+    return peeked.models;
+  });
+  const assembled = assembleRoutedModelsFromProviderLists(config, activeProviders, lists);
+  return { ...assembled, needsLive };
+}
+
+async function gatherRoutedModelsUncached(
+  config: OcxConfig,
+): Promise<GatherFlightResult> {
+  const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  // Persisted provider entries can predate newer registry fields (noVisionModels,
+  // modelInputModalities, ...). The ROUTER merges registry seeds at request time
+  // (routedProviderConfig), so the proxy behaves correctly — the catalog listing must see the
+  // same merged view or its advertisements drift from actual proxy behavior (e.g. a
+  // vision-sidecar model advertised text-only, blocking image attachments app-side).
+  // Enrich a CLONE: hydrated defaults must never leak into the persisted config.
+  const activeProviders = Object.entries(config.providers)
+    .filter(([, prov]) => prov.disabled !== true)
+    .map(([name, prov]): [string, OcxProviderConfig] => {
+      const enriched = { ...prov };
+      enrichProviderFromRegistry(name, enriched);
+      return [name, enriched];
+    });
+  const lists = await Promise.all(
+    activeProviders.map(([name, prov]) => fetchProviderModels(name, prov, ttlMs, providerContextCap(config, name))),
+  );
+  return assembleRoutedModelsFromProviderLists(config, activeProviders, lists);
 }
 
 export function augmentRoutedModelsWithRegistryOpenAiApiRows(

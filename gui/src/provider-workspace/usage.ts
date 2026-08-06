@@ -49,6 +49,15 @@ export function parseLiveModelCounts(data: unknown): ProviderLiveModelCounts {
   return counts;
 }
 
+/**
+ * Whether `/api/selected-models` still has a background live gather in flight.
+ * When true the payload is cache/configured seeds and the GUI should re-poll shortly.
+ */
+export function parseModelsRefreshing(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  return (data as { refreshing?: unknown }).refreshing === true;
+}
+
 /** Parse `/api/selected-models` selected allowlist map into provider -> model id list. */
 export function parseSelectedModels(data: unknown): ProviderSelectedModels {
   if (!data || typeof data !== "object") return {};

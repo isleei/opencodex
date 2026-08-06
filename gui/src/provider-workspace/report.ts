@@ -57,8 +57,13 @@ export function formatQuotaSourceLabel(source: string | undefined): string {
 }
 
 /**
- * Models-tab list derivation: live models, else configured static ids, else
- * the default model as a single-row fallback; filtered by substring query.
+ * Models-tab list derivation: live models union configured static ids (so a successful
+ * refresh-models persist is visible even when the Codex catalog hides media-gen rows),
+ * else configured/default fallback; always append custom models; filter by substring query.
+ *
+ * `hasLiveModels` still decides whether an empty live `base` should fall back to configured
+ * seeds — it must not be inferred by subtracting custom ids from `base` (that misreads a live
+ * catalog as custom-only whenever a custom id also appears upstream).
  */
 export function filterModels(
   base: string[],
@@ -74,10 +79,13 @@ export function filterModels(
    */
   hasLiveModels: boolean,
 ): string[] {
-  const fallback = configuredModels && configuredModels.length > 0
-    ? configuredModels
+  const configured = configuredModels && configuredModels.length > 0 ? configuredModels : [];
+  const fallback = configured.length > 0
+    ? configured
     : defaultModel ? [defaultModel] : [];
-  const primary = hasLiveModels ? base : fallback;
+  // Live discovery is authoritative for chat routing, but configured ids (including media-gen
+  // rows the catalog strips) still belong on the management Models tab after the user saved them.
+  const primary = hasLiveModels ? [...base, ...configured] : fallback;
   const list = [...new Set([...primary, ...customModels])];
   const q = query.trim().toLowerCase();
   if (!q) return list;

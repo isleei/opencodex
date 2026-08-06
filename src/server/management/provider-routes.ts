@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import {
+  catalogModelSlug,
+  clearGatherRoutedModelsInflight,
+  fetchProviderModels,
+  invalidateCodexModelsCache,
+  nativeModelRows,
+  uniqueCatalogModelsForPublicList,
+} from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -26,7 +33,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
+import { deriveProviderPresets, enrichProviderFromRegistry } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
@@ -40,7 +47,12 @@ import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { getProviderDiscoveryStatus } from "../../codex/model-cache";
+import {
+  clearModelCache,
+  DEFAULT_MODEL_CACHE_TTL_MS,
+  getProviderDiscoveryStatus,
+  getProviderLiveModelCount,
+} from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -341,6 +353,131 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+    });
+  }
+
+  // Force-refresh one provider's live model list: drop the per-provider TTL cache (and any
+  // in-flight multi-provider gather that could re-serve the old payload), re-fetch, then best-
+  // effort rebuild the Codex catalog so the Models page and Codex pickers pick up the new rows.
+  if (url.pathname === "/api/providers/refresh-models" && req.method === "POST") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    const raw = config.providers[name]!;
+    if (raw.disabled) {
+      return jsonResponse({
+        ok: false,
+        provider: name,
+        models: [],
+        count: 0,
+        error: "Provider is disabled",
+      });
+    }
+    const prov = { ...raw };
+    enrichProviderFromRegistry(name, prov);
+    const started = Date.now();
+
+    if (prov.authMode === "forward") {
+      return jsonResponse({
+        ok: true,
+        provider: name,
+        models: [],
+        count: 0,
+        source: "forward",
+        latencyMs: Date.now() - started,
+        message: "Passthrough provider has no upstream /models catalog.",
+      });
+    }
+
+    if (prov.liveModels === false) {
+      const models = [...(prov.models ?? [])];
+      if (models.length === 0 && prov.defaultModel) models.push(prov.defaultModel);
+      return jsonResponse({
+        ok: true,
+        provider: name,
+        models,
+        count: models.length,
+        source: "static",
+        latencyMs: Date.now() - started,
+        message: "Live discovery is off; returning configured/static models only.",
+      });
+    }
+
+    clearModelCache(name);
+    clearGatherRoutedModelsInflight();
+    const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+    const catalogModels = await fetchProviderModels(
+      name,
+      prov,
+      ttlMs,
+      providerContextCap(config, name),
+    );
+    const models = catalogModels.map(model => model.id);
+    const discovery = getProviderDiscoveryStatus(name);
+    const liveModelCount = getProviderLiveModelCount(name);
+    const latencyMs = Date.now() - started;
+
+    if (discovery?.status === "failed") {
+      const error = discovery.reason === "http"
+        ? `upstream /models returned ${discovery.httpStatus}`
+        : discovery.reason === "blocked"
+          ? "upstream /models blocked by destination policy"
+          : discovery.reason === "invalid_response"
+            ? "upstream /models returned an unexpected response"
+            : discovery.reason === "network"
+              ? "upstream /models network error"
+              : "provider model discovery failed";
+      // Do not rewrite providers[name].models from a failed probe — keep the last good seed.
+      await refreshCodexCatalogBestEffort();
+      return jsonResponse({
+        ok: false,
+        provider: name,
+        models,
+        count: models.length,
+        source: "fallback",
+        persisted: false,
+        discovery,
+        ...(liveModelCount !== undefined ? { liveModelCount } : {}),
+        latencyMs,
+        error,
+      });
+    }
+
+    // Live success: write the discovered ids into the provider config so the Models tab,
+    // Settings default-model picker, and static fallback all see the same list after restart.
+    // Only discovery.status === "ok" means upstream actually answered; "configured" without a
+    // live status is the no-token / no-fetch path and must not clobber an existing models seed.
+    let persisted = false;
+    if (discovery?.status === "ok") {
+      const existing = config.providers[name]!;
+      if (models.length > 0) existing.models = models;
+      else delete existing.models;
+      // Drop allowlist entries that no longer exist upstream so selectedModels cannot hide
+      // every newly discovered row while pointing at dead ids.
+      if (Array.isArray(existing.selectedModels) && existing.selectedModels.length > 0) {
+        const liveIds = new Set(models);
+        const kept = existing.selectedModels.filter(id => liveIds.has(id));
+        if (kept.length > 0) existing.selectedModels = kept;
+        else delete existing.selectedModels;
+      }
+      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+      save(config);
+      reconcileLiveStateStores();
+      persisted = true;
+    }
+
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({
+      ok: true,
+      provider: name,
+      models,
+      count: models.length,
+      source: discovery?.status === "ok" ? "live" : "configured",
+      persisted,
+      ...(discovery ? { discovery } : {}),
+      ...(liveModelCount !== undefined ? { liveModelCount } : {}),
+      latencyMs,
     });
   }
 

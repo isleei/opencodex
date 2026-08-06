@@ -166,10 +166,17 @@ export function requestLogDto(entry: RequestLogEntry): Record<string, unknown> {
  * canonical, TTL-cached `gatherRoutedModels` (single source of truth) — so the GUI/codex endpoints
  * share the same fetch, the same per-provider cache (dedups Codex's frequent /v1/models polling),
  * and the same stale fallback when a provider blips, instead of a parallel uncached copy.
+ *
+ * Pass `preferCached: true` for management UI lists that must paint immediately from
+ * cache/configured seeds (background live refresh still runs). Codex catalog sync and
+ * `/v1/models` must keep the default so they wait for the authoritative live set.
  */
-export async function fetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
+export async function fetchAllModels(
+  config: OcxConfig,
+  options?: { preferCached?: boolean },
+): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../../codex/catalog");
-  return gatherRoutedModels(config);
+  return gatherRoutedModels(config, options?.preferCached ? { preferCached: true } : undefined);
 }
 
 export interface GrokCandidateModel {
