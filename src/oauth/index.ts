@@ -1177,12 +1177,12 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
   const cred = getCredential(provider);
   const st = loginState.get(provider);
   const set = getAccountSet(provider);
-  // Full email on purpose: local dashboard/CLI account management needs to distinguish
-  // multiauth slots (masked local-parts collide). Tokens stay out of this surface.
+  // Masked emails on purpose: status DTOs are shared with GUI/CLI surfaces that
+  // must not leak full local-parts. Tokens stay out of this surface entirely.
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
     ...(a.alias ? { alias: a.alias } : {}),
-    email: a.credential.email ?? undefined,
+    email: maskEmail(a.credential.email) ?? undefined,
     active: a.id === set.activeAccountId,
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,

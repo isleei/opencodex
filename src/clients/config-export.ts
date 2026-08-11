@@ -127,6 +127,16 @@ export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
 export const LOOPBACK_API_KEY_PLACEHOLDER = "opencodex-loopback";
 
 /**
+ * Legacy Pi launch env var. Newer exports use {@link LOOPBACK_API_KEY_PLACEHOLDER}
+ * in models.json; `ocx pi` still seeds this env so older `$OPENCODEX_API_KEY`
+ * configs keep working.
+ */
+export const PI_API_KEY_ENV = "OPENCODEX_API_KEY";
+
+/** Pi env-reference form for older managed blocks (`$OPENCODEX_API_KEY`). */
+export const PI_API_KEY_ENV_REF = `$${PI_API_KEY_ENV}`;
+
+/**
  * Gajae's `apiKeyEnv` is env-name-only and fail-closed. Its sibling `apiKey`
  * falls back to treating the literal text as the token when the variable is
  * unset, which would silently ship a bogus credential — so we never emit it.

@@ -21,7 +21,7 @@ describe("OAuth status privacy", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test("getLoginStatus returns full provider email for local account management", async () => {
+  test("getLoginStatus returns a masked provider email", async () => {
     await saveCredential("xai", {
       access: "access-token",
       refresh: "refresh-token",
@@ -34,9 +34,10 @@ describe("OAuth status privacy", () => {
     const status = getLoginStatus("xai");
 
     expect(status.loggedIn).toBe(true);
-    expect(status.email).toBe("person@example.test");
-    expect(status.accounts?.[0]?.email).toBe("person@example.test");
+    expect(status.email).toBe("p***n@example.test");
+    expect(status.accounts?.[0]?.email).toBe("p***n@example.test");
     expect(status.source).toBe("local-cli");
+    expect(JSON.stringify(status)).not.toContain("person@example.test");
     // Tokens must never leave the credential store into status DTOs.
     expect(JSON.stringify(status)).not.toContain("access-token");
     expect(JSON.stringify(status)).not.toContain("refresh-token");

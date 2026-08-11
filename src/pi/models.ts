@@ -16,8 +16,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { atomicWriteFile } from "../config";
 import {
+  LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCODE_PROVIDER_ID,
-  PI_API_KEY_ENV_REF,
   buildClientConfig,
   type ExportModel,
   type PiGeneratedConfig,
@@ -112,7 +112,7 @@ export function buildPiOpencodexProvider(
     return {
       baseUrl,
       api: "openai-completions",
-      apiKey: PI_API_KEY_ENV_REF,
+      apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
       models: [],
     };
   }
