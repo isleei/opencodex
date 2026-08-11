@@ -1228,6 +1228,7 @@ export const tr: Record<TKey, string> = {
   "nav.codexAuth": "Codex Kimlik Doğrulama",
   "nav.api": "API",
   "nav.integrations": "Entegrasyonlar",
+  "nav.claude": "Claude",
   "nav.openMenu": "Menüyü aç",
   "nav.closeMenu": "Menüyü kapat",
   "integrations.subtitle": "İstemcileri opencodex'e bağlayın, kimlik bilgilerini yönetin.",

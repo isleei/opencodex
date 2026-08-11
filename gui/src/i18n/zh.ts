@@ -799,6 +799,7 @@ export const zh: Record<TKey, string> = {
   "nav.api": "API",
   "nav.clients": "客户端",
   "nav.integrations": "集成",
+  "nav.claude": "Claude",
   "nav.codexAuth": "Codex 认证",
   "nav.openMenu": "打开菜单",
   "nav.closeMenu": "关闭菜单",

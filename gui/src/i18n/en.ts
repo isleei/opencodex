@@ -1251,6 +1251,7 @@ export const en = {
   "nav.api": "API",
   "nav.clients": "Clients",
   "nav.integrations": "Integrations",
+  "nav.claude": "Claude",
   "nav.openMenu": "Open menu",
   "nav.closeMenu": "Close menu",
   "integrations.subtitle": "Connect clients to opencodex, manage credentials, and restore client configuration.",

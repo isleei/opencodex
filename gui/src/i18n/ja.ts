@@ -1190,6 +1190,7 @@ export const ja: Record<TKey, string> = {
   "nav.codexAuth": "Codex 認証",
   "nav.api": "API",
   "nav.integrations": "連携",
+  "nav.claude": "Claude",
   "nav.openMenu": "メニューを開く",
   "nav.closeMenu": "メニューを閉じる",
   "integrations.subtitle": "クライアントを opencodex に接続し、認証情報の管理とクライアント設定の復元を行います。",

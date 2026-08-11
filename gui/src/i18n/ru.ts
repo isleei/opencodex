@@ -1232,6 +1232,7 @@ export const ru: Record<TKey, string> = {
   "nav.codexAuth": "Аутентификация Codex",
   "nav.api": "API",
   "nav.integrations": "Интеграции",
+  "nav.claude": "Claude",
   "nav.openMenu": "Открыть меню",
   "nav.closeMenu": "Закрыть меню",
   "integrations.subtitle": "Подключайте клиенты к opencodex, управляйте учётными данными и восстанавливайте конфигурацию клиентов.",

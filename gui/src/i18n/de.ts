@@ -782,6 +782,7 @@ export const de: Record<TKey, string> = {
   "nav.codexAuth": "Codex-Auth",
   "nav.api": "API",
   "nav.integrations": "Integrationen",
+  "nav.claude": "Claude",
   "nav.openMenu": "Menü öffnen",
   "nav.closeMenu": "Menü schließen",
   "integrations.subtitle": "Clients mit opencodex verbinden, Zugangsdaten verwalten und Client-Konfigurationen wiederherstellen.",
