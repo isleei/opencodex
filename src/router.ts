@@ -12,6 +12,7 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { applyDirectReasoningEffortContracts } from "./providers/derive";
 import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
@@ -22,8 +23,6 @@ import {
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
-import { getEffectiveActiveCodexAccountId } from "./codex/routing";
-import { getAccountSet } from "./oauth/store";
 import {
   buildRouteDecisionTrace,
   type RouteDecisionKind,
@@ -286,6 +285,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
   const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
+  const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
   const reasoningSplitModels = mergeStringArray(registryEntry.reasoningSplitModels, provider.reasoningSplitModels);
   const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
   const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
@@ -302,12 +302,16 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   if (userBaseUrlIsResolved) warnIfBaseUrlDiscarded(providerName, userBaseUrl, baseUrl);
   assertProviderDestinationAllowed(providerName, { baseUrl, allowPrivateNetwork: provider.allowPrivateNetwork });
 
-  return {
+  const resolved: OcxProviderConfig = {
     ...provider,
     adapter: registryEntry.adapter,
     baseUrl,
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
+      : {}),
+    ...(provider.requiresAdjacentResponsesToolResults === undefined
+      && registryEntry.requiresAdjacentResponsesToolResults !== undefined
+      ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
       : {}),
     ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
       ? { supportsServiceTier: registryEntry.supportsServiceTier }
@@ -370,10 +374,13 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
+    ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
+  applyDirectReasoningEffortContracts(registryEntry, resolved, provider);
+  return resolved;
 }
 
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
@@ -513,24 +520,6 @@ function routeModelInternal(
       quota: quotaEvidenceForCandidate({
         provider: candidate.provider,
         model: candidate.model,
-        ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
-          && providerCodexAccountMode(
-            OPENAI_CODEX_PROVIDER_ID,
-            config.providers[OPENAI_CODEX_PROVIDER_ID],
-          ) === "pool"
-          ? (() => {
-              const codexAccountId = getEffectiveActiveCodexAccountId(config);
-              return {
-                codexAccountId,
-                codexAccountPlan: codexAccountId
-                  ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
-                  : undefined,
-              };
-            })()
-          : {}),
-        accountRef: candidate.provider === "anthropic"
-          ? getAccountSet("anthropic")?.activeAccountId
-          : undefined,
       }),
       cost: costEvidenceForCandidate({
         provider: candidate.provider,
@@ -693,6 +682,11 @@ export function routeModel(
       : undefined,
   });
   return route;
+}
+
+/** Resolve a combo-selected provider/model target without consulting public combo aliases again. */
+export function routeConcreteModel(config: OcxConfig, modelId: string): RouteResult {
+  return routeModelInternal(config, modelId, true, undefined);
 }
 
 function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {

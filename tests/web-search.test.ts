@@ -315,6 +315,30 @@ describe("web-search sidecar planning", () => {
     expect(plan?.settings.model).toBe("gpt-5.6-luna");
   });
 
+  test("planWebSearch never arms a sidecar excluded by tool_choice", () => {
+    const parsed = parsedWithWebSearch();
+    const sidecar = {
+      providerName: "openai" as const,
+      provider: forwardProvider,
+      accountMode: "direct" as const,
+      authContext: { kind: "main" as const, accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    };
+    const plan = () => planWebSearch(config(), parsed, false, routedProvider, "model", sidecar);
+
+    parsed.options.toolChoice = "none";
+    expect(plan()).toBeUndefined();
+    parsed.options.toolChoice = { name: "read_file" };
+    expect(plan()).toBeUndefined();
+    parsed.options.toolChoice = { allowedTools: ["read_file"], mode: "required" };
+    expect(plan()).toBeUndefined();
+
+    parsed.options.toolChoice = { name: "web_search" };
+    expect(plan()).toBeDefined();
+    parsed.options.toolChoice = { allowedTools: ["web_search"], mode: "required" };
+    expect(plan()).toBeDefined();
+  });
+
   test("planWebSearch activates for pool-selected headers even when raw inbound auth would be main", () => {
     const parsed = parsedWithWebSearch();
     const selectedHeaders = headersForCodexAuthContext(
@@ -411,6 +435,47 @@ function scriptedAdapter(firstPass: AdapterEvent[]): ProviderAdapter {
 }
 
 describe("BUG-R86 routed web-search timeout semantics", () => {
+  test("web-search-loop SSE snapshots preserve the client-facing model selector", async () => {
+    const parsed = parseRequest({
+      model: "claude-sonnet-5",
+      input: "hi",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    });
+    parsed._responseModelId = "anthropic/claude-sonnet-5";
+    let upstreamModel = "";
+    const adapter: ProviderAdapter = {
+      name: "identity",
+      buildRequest: request => {
+        upstreamModel = request.modelId;
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        yield { type: "text_delta", text: "answer" };
+        yield { type: "done" };
+      },
+    };
+    const response = await runWithWebSearch({
+      parsed,
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+    const frames = await collectSse(response.body!);
+    const models = frames.flatMap(frame => {
+      const responseModel = (frame.data.response as { model?: unknown } | undefined)?.model;
+      return typeof responseModel === "string" ? [responseModel] : [];
+    });
+
+    expect(upstreamModel).toBe("claude-sonnet-5");
+    expect(models.length).toBeGreaterThan(0);
+    expect(new Set(models)).toEqual(new Set(["anthropic/claude-sonnet-5"]));
+  });
+
   test("translator overflow remains typed through the sidecar loop and bridge", async () => {
     const adapter: ProviderAdapter = {
       name: "overflow",

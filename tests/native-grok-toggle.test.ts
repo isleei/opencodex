@@ -9,7 +9,7 @@ import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
 import type { OcxConfig } from "../src/types";
 
 /**
- * Route contract for devlog/_plan/260803_integrations_toggle_all/012 (Rev 3).
+ * Route contract for devlog/_fin/260803_integrations_toggle_all/012 (Rev 3).
  *
  * The toggle owns a fenced region of ~/.grok/config.toml and carries no
  * snapshot and no journal — re-enabling regenerates the fence from the current
@@ -419,6 +419,7 @@ test("a foreign-home install state refuses disable and writes nothing (audit r1 
   const { status, body } = await put(baseConfig(), false);
   expect(status).toBe(409);
   expect(body.reason).toBe("home_mismatch");
+  expect(body.desiredEnabled).toBe(false);
   expect(String(body.message)).toContain("/foreign/codex-home");
   // Nothing was written: the fence is still there.
   expect(readConfig()).toContain(BEGIN);

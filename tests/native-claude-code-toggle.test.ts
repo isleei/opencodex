@@ -3,7 +3,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
 /**
- * Route contract for devlog/_plan/260803_integrations_toggle_all/011.
+ * Route contract for devlog/_fin/260803_integrations_toggle_all/011.
  *
  * The toggle writes one field of opencodex's own config, so there is nothing to
  * snapshot and nothing to journal — turning it back on is the undo. What DOES
@@ -115,6 +115,17 @@ test("a non-boolean enabled is rejected", async () => {
   });
   const res = await response;
   expect(res!.status).toBe(400);
+});
+
+test("a null body is rejected instead of crashing the route", async () => {
+  const { response } = dispatch(baseConfig(), "/api/native-integrations/claude", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  const res = await response;
+  expect(res!.status).toBe(400);
+  expect(await res!.json()).toEqual({ error: "enabled must be a boolean" });
 });
 
 test("genuine lock contention refuses 409 config_busy, a broken lock is a 500", async () => {

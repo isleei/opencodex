@@ -75,7 +75,7 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有六个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
+有七个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
 opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
 它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
@@ -86,6 +86,7 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
+ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
 ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
 ocx logout <provider>
@@ -97,7 +98,7 @@ ocx logout <provider>
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 编程模型。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
-| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。由于 CCA 不提供通用 `/models` 端点，因此使用维护中的六模型静态目录。 |
+| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
@@ -131,9 +132,9 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 69 个预设：58 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 78 个预设：66 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
-验证因提供商而异，Command Code 的公开目录会将密钥报告为无法验证。主要条目包括：
+验证因提供商而异。主要条目包括：
 
 **ClinePass** 使用 Cline API 密钥连接[官方订阅目录](https://docs.cline.bot/getting-started/clinepass)和
 [Chat Completions 端点](https://docs.cline.bot/api/chat-completions)。运营主体是
@@ -163,10 +164,18 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
+| Vultr Serverless Inference | `https://api.vultrinference.com/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
+| SambaNova Cloud | `https://api.sambanova.ai/v1` |
+| Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
+| Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -184,6 +193,9 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | ……以及更多 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
 
+**OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
+`https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
+
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
 火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
 
@@ -196,6 +208,12 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 > 文本模型。Coding Plan 默认使用 `ark-code-latest`，Agent Plan 默认使用
 > `deepseek-v4-pro`。
 
+**Chutes 发现：**`chutes` 预设使用 Chutes 固定的共享 OpenAI 兼容 LLM gateway。它读取公开的
+`/v1/models` 目录，仅保留 `supported_features` 包含 `tools` 的记录，保留含 `/` 的原生 model id 与
+安全的实时 metadata，并把发现限制为 256 KiB 和 128 条原始记录。由于该目录公开，它无法证明输入的
+密钥有效；chat 请求仍会使用已配置的 Bearer 密钥认证。用户自行部署的 custom Chute host 与非 LLM API
+需要使用 custom provider。密钥可在 [Chutes dashboard](https://chutes.ai/auth/start) 创建。
+
 **DeepInfra 发现：**`deepinfra` 是使用 `openai-chat` adapter 和 Bearer API 密钥的密钥型
 OpenAI Chat Completions 提供商。registry 固定的 DeepInfra 模型列表 URL 仅保留带 `chat` 标签的记录，
 同时保留含 `/` 的原生模型 id，并把实时发现限制为 512 KiB 和 512 条原始记录。
@@ -205,11 +223,46 @@ OpenAI Chat Completions 提供商。registry 固定的 DeepInfra 模型列表 UR
 并将实时发现限制为 256 KiB 和 256 条原始记录。它仅覆盖 serverless text 与 vision-language chat；独立的
 image、audio 和 GPU 端点不在范围内。密钥可在 [Hyperbolic](https://app.hyperbolic.ai) 创建。
 
-**Command Code 发现：**该预设从固定的 Provider API 主机读取 Command Code 公开的
+**Nscale 与 Vultr 发现：**两个预设都会读取需要认证的 `/v1/models` 目录、保留原生模型 id，并将发现限制为
+256 KiB 和 256 条原始记录。Nscale 的目录没有 modality 字段，却混合了 chat、image 与 embedding 模型，
+所以预设仅允许其官方工具调用 API 示例使用的 `meta-llama/Llama-3.1-8B-Instruct`。Vultr 目前只明确
+`kimi-k2-instruct` 支持工具调用，因此其预设仅暴露这一模型。其他记录会保持隐藏，直到提供商发布同等的
+agent-tool 证据。Nscale service token 可在 [Nscale Console](https://console.nscale.com) 创建；Vultr
+inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制。
+
+**Command Code 发现：**该预设从固定的 Provider API 主机读取 Command Code 的
 `/provider/v1/models` 列表，保留含 `/` 的原生模型 id，并将实时发现限制为 256 KiB 和 256 条原始记录。
-模型目录无需认证，因此 CLI 登录流程会将密钥报告为无法验证，而不是误报为有效。聊天请求使用已配置的
-bearer 密钥；API 访问需要 Provider 套餐，Go/Pro 订阅用户的 CLI 认证桥接尚不可用。
-密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
+`ocx login command-code` 支持通过浏览器进行 OAuth 登录（现有 Command Code CLI 用户还可选择从
+`~/.commandcode/auth.json` 导入本地 CLI 凭据）；模型目录按账户隔离，并在登录后从经过认证的发现
+端点获取。聊天请求使用已配置的 bearer 密钥。密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
+
+**SambaNova Cloud 发现：**该预设从固定 API 主机读取 SambaNova Cloud 的公开 `/v1/models` 列表，保留提供商原生
+模型 id，并将发现限制为 128 KiB 和 128 条原始记录。该目录无需鉴权，因此 CLI 登录流程不会把公开响应
+当作密钥有效性的证明，而会将密钥报告为无法验证。chat 请求仍使用已配置的 Bearer 密钥；由于 SambaNova
+尚不支持并行 function call，该能力会被禁用。私有 SambaStudio 部署端点不在范围内。
+密钥可在 [SambaNova Cloud](https://cloud.sambanova.ai/apis) 创建。
+
+**Nebius Token Factory 发现：**该预设请求需要鉴权的 verbose 模型目录，仅保留 architecture 输出 text
+的记录，从而排除 embedding 和 image-generation 模型。它保留含 `/` 的原生模型 id、上游报告的 context
+和 input modality metadata，并将发现限制为 512 KiB 和 512 条原始记录。dedicated deployment 主机不在
+范围内。密钥可在 [Nebius Token Factory](https://tokenfactory.nebius.com) 创建。
+**DigitalOcean 发现：**该预设使用 model access key 访问固定的共享 Serverless Inference 主机，只公开
+已鉴权 `/v1/models` 响应与 DigitalOcean 官方文档确认的 Chat Completions allowlist 的交集。未知、
+Responses-only、embedding 和 media-generation 模型 id 会按 fail closed 原则排除。发现上限为 256 KiB
+和 256 条原始记录；agent 专属及 dedicated 主机不在范围内。密钥可在
+[DigitalOcean Control Panel](https://cloud.digitalocean.com/model-studio/manage-keys) 创建。
+
+**Scaleway 发现：**该预设只公开已鉴权模型列表与官方文档确认的 Serverless Chat Completions allowlist
+的交集。未知、Responses-only、embedding、transcription 及其他 media-model id 会按 fail closed 原则排除；
+发现上限为 128 KiB 和 128 条原始记录。它使用默认 Project 的共享 endpoint；带 Project ID 的 URL 和
+dedicated deployment 需要配置为 custom provider。API 密钥可在
+[Scaleway 控制台](https://console.scaleway.com/generative-api) 创建。
+
+**Featherless 发现：**该预设在固定的 OpenAI 兼容主机上鉴权，只请求按 chat 和当前 plan 过滤后的热门
+模型第一页，最多 100 条。registry 随后按 fail closed 原则要求每条记录分别报告当前 plan 可用、无需
+Hugging Face gate，且 `features.tool_use: true`。发现上限为 128 KiB 和 100 条原始记录，因此不会下载或
+缓存包含数万模型的完整目录。由于 `/v1/models` 在文档中可带或不带鉴权调用，它无法证明输入的密钥有效；chat 请求仍会使用已配置的 Bearer 密钥认证。个人 plan 仅适用于 interactive/prototype 用途；任意 application 需要使用
+Scale plan。密钥可在 [Featherless dashboard](https://featherless.ai/account/api-keys) 创建。
 
 > **Baseten 范围：**该预设仅覆盖 Baseten 的共享 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)。
 > 本地使用可选择个人 [API 密钥](https://docs.baseten.co/organization/api-keys)；共享或生产用途请使用具备

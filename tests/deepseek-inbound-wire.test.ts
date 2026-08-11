@@ -11,12 +11,13 @@
  * while that replay silently flipped the wire back, so the end-to-end cases below
  * assert the captured upstream URL, which is externally observable.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { providerConfigSeed } from "../src/providers/derive";
-import { getProviderRegistryEntry } from "../src/providers/registry";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/registry";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
+import { MAX_SYNTHESIZED_OUTPUT_ITEMS } from "../src/server/responses-json-events";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -126,65 +127,40 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect((await drive("chat")).url).toBe("https://api.deepseek.com/chat/completions");
   });
 
-  test("a Codex WebSocket turn asks DeepSeek for bounded JSON upstream", async () => {
+  test("a Codex WebSocket turn keeps real streaming upstream", async () => {
+    // The #875 bounded-JSON force is retired for deepseek: the documented terminal
+    // (response.completed, no [DONE]) closes the stream, so WS turns stream live.
     const request = await drive("responses", "websocket");
     expect(request.url).toBe("https://api.deepseek.com/responses");
-    expect(request.body.stream).toBe(false);
+    expect(request.body.stream).toBe(true);
   });
 
-  test("a Codex WebSocket turn keeps plain JSON downstream (no SSE synthesis)", async () => {
-    globalThis.fetch = (async () => Response.json({
-      id: "resp_deepseek",
-      object: "response",
-      status: "completed",
-      output: [],
-    })) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
-    const response = await handleResponses(
-      new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
-      }),
-      config,
-      { model: "", provider: "" },
-      { inboundTransport: "websocket" },
-    );
-    expect(response.headers.get("content-type")).not.toContain("text/event-stream");
-  });
-
-  test("ordinary HTTP Responses requests also use bounded JSON upstream (#875)", async () => {
-    // The reliability policy is transport-neutral: DeepSeek's Responses stream can
-    // deliver output without a terminal, so HTTP turns get the same bounded JSON
-    // upstream as WS turns — and a synthesized terminal SSE back.
+  test("ordinary HTTP Responses requests keep stream:true upstream (#875 retired)", async () => {
     const request = await drive("responses");
-    expect(request.body.stream).toBe(false);
+    expect(request.body.stream).toBe(true);
   });
 
-  test("an HTTP streaming client receives a synthesized terminal SSE instead of a stall (#875)", async () => {
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  test("a documented no-[DONE] DeepSeek stream relays live and closes with a synthesized [DONE]", async () => {
+    // DeepSeek's Responses guide: the stream ends with response.completed /
+    // response.incomplete / response.failed — "there is no data: [DONE] message."
+    // The relay's terminal boundary must close on the terminal event and append
+    // the conventional sentinel itself.
+    const upstreamFrames = [
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "resp_ds", status: "in_progress", output: [] } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "search", arguments: "{\"q\":\"docs\"}", status: "completed" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_ds", status: "completed", output: [{ type: "function_call", id: "fc_1", call_id: "call_1", name: "search", arguments: "{\"q\":\"docs\"}", status: "completed" }] } })}\n\n`,
+      // No data: [DONE] — and the connection stays open like a lazy gateway.
+    ];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean };
-      if (body.stream === true) {
-        // Old world: a terminal-less SSE that never closes — the stall the issue
-        // reported. The policy must never send stream:true, so fail loudly here.
-        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        });
-      }
-      return Response.json({
-        id: "resp_deepseek",
-        object: "response",
-        status: "completed",
-        output: [{
-          type: "function_call",
-          id: "fc_1",
-          call_id: "call_1",
-          name: "search",
-          arguments: "{\"q\":\"docs\"}",
-          status: "completed",
-        }],
-      });
+      expect(body.stream).toBe(true);
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of upstreamFrames) controller.enqueue(encoder.encode(frame));
+          // Deliberately never controller.close(): the terminal boundary must cut it.
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
 
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
@@ -214,24 +190,109 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(text).toContain('"call_1"');
   });
 
-  /**
-   * Review finding on this layer: the bounded-JSON answer never touches the SSE
-   * relay, so it never picks up the relay's item-id rewrite. Without the
-   * normalization added here, enabling this reliability policy would silently
-   * DISABLE id repair for a provider that has it configured — the client would
-   * get canonical ids while streaming and placeholder ids the moment the policy
-   * switched the upstream to bounded JSON.
-   */
-  function repairingProvider(): OcxProviderConfig {
+  test("a streamed DeepSeek turn repairs UUID item ids on the live SSE path (#938)", async () => {
+    // Integration proof for the STREAMING id-repair path (relay rewrite), which the
+    // bounded-JSON era never exercised end to end: UUID output_item.added → delta →
+    // terminal snapshot, no [DONE]; canonical msg_/rs_ ids must reach the client.
+    const UUID_MSG = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const UUID_RS = "1b9d6bcd-bbfd-4b2d-9b9d-5c0a2fb41a1b";
+    const upstreamFrames = [
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "resp_ds", status: "in_progress", output: [] } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: UUID_RS, summary: [] } })}\n\n`,
+      // DeepSeek wraps streamed reasoning in content parts; content_part.* is mapped
+      // as a "message" event type, so this only repairs through the cross-table
+      // fallback (the live-probe leak this test pins).
+      `data: ${JSON.stringify({ type: "response.content_part.added", item_id: UUID_RS, output_index: 0, content_index: 0, part: { type: "reasoning_text", text: "" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "message", id: UUID_MSG, role: "assistant", status: "in_progress", content: [] } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.output_text.delta", item_id: UUID_MSG, output_index: 1, delta: "hi" })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_ds", status: "completed", output: [
+        { type: "reasoning", id: UUID_RS, summary: [] },
+        { type: "message", id: UUID_MSG, role: "assistant", status: "completed", content: [{ type: "output_text", text: "hi", annotations: [] }] },
+      ] } })}\n\n`,
+    ];
+    globalThis.fetch = (async () => {
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of upstreamFrames) controller.enqueue(encoder.encode(frame));
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    // The plain provider seed carries no explicit repair config; the registry's
+    // { repairInvalidIds: true } policy must reach the live route via backfill.
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { abortSignal: AbortSignal.timeout(5_000) },
+    );
+    const text = await response.text();
+    expect(text).not.toContain(UUID_MSG);
+    expect(text).not.toContain(UUID_RS);
+    expect(text).toMatch(/"id":"msg_ocx_[0-9a-f]+/);
+    expect(text).toMatch(/"id":"rs_ocx_[0-9a-f]+/);
+    expect(text).toContain("data: [DONE]");
+  });
+
+});
+
+/**
+ * Bounded-JSON reliability mechanism (#875) — deepseek no longer opts in, so these
+ * tests keep the mechanism reachable through a synthetic registry entry. The knob
+ * is deliberately retained as a one-line rollback for public-beta upstreams; if it
+ * ever loses all users AND this fixture, delete the mechanism itself.
+ */
+describe("the bounded-JSON mechanism stays alive behind a synthetic registry entry", () => {
+  const originalFetch = globalThis.fetch;
+  const FIXTURE_ID = "bounded-json-fixture";
+  const FIXTURE_MODEL = "fixture-model";
+  const FIXTURE_BASE = "https://bounded-json.fixture.example";
+  const mutableRegistry = PROVIDER_REGISTRY as unknown as Array<Record<string, unknown>>;
+
+  beforeEach(() => {
+    mutableRegistry.push({
+      id: FIXTURE_ID,
+      label: "Bounded JSON fixture",
+      baseUrl: FIXTURE_BASE,
+      adapter: "openai-responses",
+      authKind: "key",
+      models: [FIXTURE_MODEL],
+      defaultModel: FIXTURE_MODEL,
+      modelResponsesUpstreamStreaming: { [FIXTURE_MODEL]: false },
+    });
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    const index = mutableRegistry.findIndex(entry => entry.id === FIXTURE_ID);
+    if (index >= 0) mutableRegistry.splice(index, 1);
+  });
+
+  function fixtureProvider(overrides?: Partial<OcxProviderConfig>): OcxProviderConfig {
     return {
-      ...deepseekProvider(),
-      responsesItemIdRepair: { message: ["msg_placeholder"], reasoning: ["rs_placeholder"] },
+      adapter: "openai-responses",
+      baseUrl: FIXTURE_BASE,
+      authMode: "key",
+      apiKey: "sk-test",
+      models: [FIXTURE_MODEL],
+      ...overrides,
     } as OcxProviderConfig;
+  }
+
+  function repairingFixtureProvider(): OcxProviderConfig {
+    return fixtureProvider({
+      responsesItemIdRepair: { message: ["msg_placeholder"], reasoning: ["rs_placeholder"] },
+    } as Partial<OcxProviderConfig>);
   }
 
   function completedWithPlaceholderIds(): Response {
     return Response.json({
-      id: "resp_deepseek",
+      id: "resp_fixture",
       object: "response",
       status: "completed",
       output: [
@@ -247,19 +308,46 @@ describe("the inbound scope survives the handleResponses replay", () => {
     });
   }
 
-  test("the synthesized terminal SSE carries repaired item ids, not the upstream placeholders", async () => {
-    globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
-    const response = await handleResponses(
+  async function driveFixture(
+    provider: OcxProviderConfig,
+    options: { stream?: boolean; websocket?: boolean } = {},
+  ): Promise<Response> {
+    const config = { providers: { [FIXTURE_ID]: provider } } as unknown as OcxConfig;
+    return handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+        body: JSON.stringify({
+          model: `${FIXTURE_ID}/${FIXTURE_MODEL}`,
+          input: "ping",
+          ...(options.stream === false ? {} : { stream: true }),
+        }),
       }),
       config,
       { model: "", provider: "" },
-      { abortSignal: AbortSignal.timeout(5_000) },
+      {
+        ...(options.websocket ? { inboundWire: "responses" as const, inboundTransport: "websocket" as const } : { abortSignal: AbortSignal.timeout(5_000) }),
+      },
     );
+  }
+
+  test("an opted-in model gets stream:false upstream and a synthesized terminal SSE", async () => {
+    const captured: Array<{ stream?: boolean }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean });
+      return completedWithPlaceholderIds();
+    }) as typeof fetch;
+    const response = await driveFixture(fixtureProvider());
+    expect(captured[0]?.stream).toBe(false);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    expect(text).toContain("data: [DONE]");
+    expect(text).toContain('"type":"response.completed"');
+  });
+
+  test("the synthesized terminal SSE carries repaired item ids, not the upstream placeholders", async () => {
+    globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
+    const response = await driveFixture(repairingFixtureProvider());
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const text = await response.text();
     expect(text).not.toContain("msg_placeholder");
@@ -268,19 +356,26 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(text).toMatch(/"id":"rs_ocx_[0-9a-f]{8}/);
   });
 
+  test("an over-cap HTTP synthesis fails closed with 502", async () => {
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_fixture",
+      object: "response",
+      status: "completed",
+      output: Array.from({ length: MAX_SYNTHESIZED_OUTPUT_ITEMS + 1 }, () => null),
+    })) as typeof fetch;
+    const response = await driveFixture(fixtureProvider());
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const text = await response.text();
+    const body = JSON.parse(text) as { error?: { type?: string; message?: string } };
+    expect(body.error?.type).toBe("server_error");
+    expect(body.error?.message).toContain("synthesized SSE item limit");
+    expect(text).not.toContain("data: [DONE]");
+  });
+
   test("the WebSocket bounded-JSON reframe carries the same repaired ids", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
-    const response = await handleResponses(
-      new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
-      }),
-      config,
-      { model: "", provider: "" },
-      { inboundWire: "responses", inboundTransport: "websocket" },
-    );
+    const response = await driveFixture(repairingFixtureProvider(), { websocket: true });
     const text = await response.text();
     expect(text).not.toContain("msg_placeholder");
     expect(text).not.toContain("rs_placeholder");
@@ -289,42 +384,20 @@ describe("the inbound scope survives the handleResponses replay", () => {
 
   test("a provider without id repair keeps the bounded-JSON body byte-identical", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
-    const response = await handleResponses(
-      new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping" }),
-      }),
-      config,
-      { model: "", provider: "" },
-      { inboundWire: "responses", inboundTransport: "websocket" },
-    );
+    const response = await driveFixture(fixtureProvider(), { websocket: true, stream: false });
     const text = await response.text();
     expect(text).toContain("msg_placeholder");
     expect(text).toContain("rs_placeholder");
   });
 
   test("an oversized upstream JSON body fails closed instead of buffering without limit", async () => {
-    // Review finding: the WebSocket bounded-JSON path (and every non-streaming upstream)
-    // materializes the whole body, so the read must have a hard byte ceiling. 33 MiB is
-    // one MiB over MAX_UPSTREAM_JSON_BODY_BYTES.
+    // The bounded-JSON path materializes the whole body, so the read must have a
+    // hard byte ceiling. 33 MiB is one MiB over MAX_UPSTREAM_JSON_BODY_BYTES.
     globalThis.fetch = (async () => new Response(" ".repeat(33 * 1024 * 1024), {
       status: 200,
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
-    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
-    const response = await handleResponses(
-      new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
-      }),
-      config,
-      { model: "", provider: "" },
-      { inboundWire: "responses", inboundTransport: "websocket" },
-    );
-
+    const response = await driveFixture(fixtureProvider(), { websocket: true });
     expect(response.status).toBe(502);
     const payload = (await response.json()) as { error?: { code?: string; message?: string } };
     expect(payload.error?.code).toBe("upstream_server_error");
@@ -384,7 +457,45 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
 
   test("the seed and backfill carry the capability, and only for declaring entries", () => {
     expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).statelessResponses).toBe(true);
+    expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).requiresAdjacentResponsesToolResults).toBe(true);
     expect(providerConfigSeed(getProviderRegistryEntry("cerebras")!).statelessResponses).toBeUndefined();
+    expect(providerConfigSeed(getProviderRegistryEntry("cerebras")!).requiresAdjacentResponsesToolResults).toBeUndefined();
+
+    const stale = deepseekProvider();
+    delete stale.requiresAdjacentResponsesToolResults;
+    enrichProviderFromRegistry("deepseek", stale);
+    expect(stale.requiresAdjacentResponsesToolResults).toBe(true);
+  });
+
+  test("DeepSeek makes a matched tool result adjacent without dropping injected developer context", () => {
+    const call = { type: "function_call", call_id: "call_plan", name: "shell_command", arguments: "{}" };
+    const injected = {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "[planning-with-files] ACTIVE PLAN" }],
+    };
+    const output = { type: "function_call_output", call_id: "call_plan", output: "Exit code: 0" };
+    const tail = { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] };
+
+    const body = buildBody(deepseekProvider(), { input: [call, injected, output, tail] }) as { input: unknown[] };
+    expect(body.input).toEqual([call, output, injected, tail]);
+  });
+
+  test("tolerant Responses providers keep interleaved tool history unchanged", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.example/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    };
+    const input = [
+      { type: "function_call", call_id: "call_plan", name: "shell_command", arguments: "{}" },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "plan" }] },
+      { type: "function_call_output", call_id: "call_plan", output: "done" },
+    ];
+
+    const body = buildBody(provider, { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
   });
 
   test("a replay miss does not forward an orphaned tool result", () => {

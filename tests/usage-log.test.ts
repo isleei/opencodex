@@ -38,6 +38,21 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("preserves explicitly empty attempts through normalization", () => {
+    const normalized = normalizeUsageEntryForTest({
+      requestId: "ocx-empty-attempts",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+      attempts: [],
+    });
+
+    expect(normalized.attempts).toEqual([]);
+  });
+
   test("persists the rate-limit-429 recovery kind on attempts", () => {
     const entry: PersistedUsageEntry = {
       requestId: "ocx-ratelimit-kind",
@@ -126,16 +141,16 @@ describe("usage log", () => {
   test("usage byte-prefix truncation and entry-count truncation report independent metadata", async () => {
     writeFileSync(
       usageLogPath(),
-      `${Array.from({ length: 200_001 }, (_, index) => JSON.stringify({ requestId: String(index) })).join("\n")}\n`,
+      `${Array.from({ length: 500_001 }, (_, index) => JSON.stringify({ requestId: String(index) })).join("\n")}\n`,
     );
     const snapshot = await readUsageSnapshotForManagement();
-    expect(snapshot.entries).toHaveLength(200_000);
+    expect(snapshot.entries).toHaveLength(500_000);
     expect(snapshot.entries[0]?.requestId).toBe("1");
-    expect(snapshot.entries.at(-1)?.requestId).toBe("200000");
+    expect(snapshot.entries.at(-1)?.requestId).toBe("500000");
     expect(snapshot.truncatedPrefixBytes).toBe(0);
     expect(snapshot.entriesTruncated).toBe(true);
     expect(snapshot.entriesDropped).toBe(1);
-  }, STORE_BUDGET_MS); // parsing 200,001 rows IS the entry-cap assertion; windows-latest measured ~5.05s against Bun's 5s default.
+  }, STORE_BUDGET_MS); // parsing 500,001 rows IS the entry-cap assertion; the 200k-row variant measured ~5.05s on windows-latest against Bun's 5s default.
 
   test("stale usage-read flight is replaced and old completion cannot clear new owner", async () => {
     writeFileSync(
@@ -768,4 +783,18 @@ describe("usage log", () => {
     expect(readRecentUsageEntries(0)).toEqual([]);
     expect(readRecentUsageEntries(-1)).toEqual([]);
   });
+
+  test("readRecentUsageEntries does not expand beyond its bounded tail window", () => {
+    const path = usageLogPath();
+    const fd = openSync(path, "w");
+    try {
+      const older = Buffer.from(`${persistedLine("outside-tail")}\n`);
+      writeSync(fd, older, 0, older.byteLength, 0);
+      truncateSync(fd, 64 * 1024 * 1024 + older.byteLength + 1);
+    } finally {
+      closeSync(fd);
+    }
+
+    expect(readRecentUsageEntries(1)).toEqual([]);
+  }, STORE_BUDGET_MS);
 });

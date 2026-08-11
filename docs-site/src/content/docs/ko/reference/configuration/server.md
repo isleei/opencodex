@@ -23,7 +23,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 인식된 Codex 보조/섀도 호출을 선택한 모델로 낮은 노력 수준에서 다시 보냅니다. 기본 source prefix는 `gpt-5.4-mini`와 `gpt-5.6-luna`입니다. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 인식된 Codex 보조/섀도 호출을 선택한 모델로 낮은 노력 수준에서 다시 보냅니다. 기본 source prefix는 `gpt-5.6-luna`입니다. 0.144.x 이하의 이전 클라이언트는 `gpt-5.4-mini`를 사용했으며 `sourceModels`로 복원할 수 있습니다. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | 웹 검색 사이드카 옵션입니다. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | 이미지 설명 사이드카 옵션입니다. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Codex `image_gen`용 독립형 Images 릴레이 옵션입니다. |
@@ -105,7 +105,7 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```
@@ -144,9 +144,10 @@ OpenAI 백엔드는 ChatGPT 로그인과 활성화된 ChatGPT `forward` provider
 | `enabled?` | `boolean` | on when usable | 주 이미지 설명 스위치입니다. |
 | `backend?` | `"openai" \| "anthropic"` | auto | web search와 같은, 명시값 우선 및 Anthropic 자격 증명 인식 선택 방식입니다. |
 | `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.4-mini`, Anthropic은 `claude-sonnet-5`입니다. |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 추론 강도입니다. Anthropic은 무시합니다. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 메인 턴당 허용되는 새 설명 캐시 미스 수입니다. `0`이면 호출이 비활성화되며, 잘못된 값은 기본값을 사용합니다. |
 | `timeoutMs?` | `number` | `45000` | 사이드카 fetch 제한 시간입니다. |
 
-Vision은 provider의 `noVisionModels`에 속한 모델로 보낸 이미지에만 활성화됩니다. OpenAI는 검색과 같은 로그인/forward 요건을 갖고 있으며, 명시적으로 선택한 Anthropic은 사용할 수 있는 자격 증명이 없으면 닫힌 상태로 실패합니다. 성공한 `data:` 설명은 backend, model, detail, image bytes, 그리고 정규화된 메시지 컨텍스트를 키로 하는 bounded cache를 사용합니다. 히트와 같은 턴의 중복은 한도를 소모하지 않습니다. 원격 `https:` 이미지와 실패했거나 비어 있는 설명은 캐시하지 않습니다.
+지원되는 수준은 업스트림 제공자의 역량과 선택한 모델이 공개한 추론 사다리에 따라 제한됩니다. Vision은 provider의 `noVisionModels`에 속한 모델로 보낸 이미지에만 활성화됩니다. OpenAI는 검색과 같은 로그인/forward 요건을 갖고 있으며, 명시적으로 선택한 Anthropic은 사용할 수 있는 자격 증명이 없으면 닫힌 상태로 실패합니다. 성공한 `data:` 설명은 backend, model, detail, image bytes, 그리고 정규화된 메시지 컨텍스트를 키로 하는 bounded cache를 사용합니다. OpenAI 키에는 reasoning effort도 포함됩니다(Anthropic 키에는 없습니다). 히트와 같은 턴의 중복은 한도를 소모하지 않습니다. 원격 `https:` 이미지와 실패했거나 비어 있는 설명은 캐시하지 않습니다.
 
 Anthropic OAuth 사이드카는 opencodex의 기존 Claude Code OAuth fingerprint를 재사용합니다. 의도한 계정과 워크로드로 소크 테스트를 수행합니다.

@@ -5,11 +5,31 @@ const {
 } = require("./pr-quality.cjs");
 const {
   readinessStateMarker,
+  gateStateMarker,
   READINESS_LATEST_DEV_BEHIND_MAX
 } = require("./pr-quality-state.cjs");
 
-/** Marks the bot's review-readiness checklist message. */
+/**
+ * Legacy marker for the pre-consolidation readiness comment. It is matched
+ * only to migrate and delete old comments; the gate never writes it.
+ */
 const READINESS_MARKER = "<!-- pr-quality-readiness -->";
+/** Marks the bot's consolidated PR gate message. */
+const GATE_MARKER = "<!-- opencodex-pr-gate -->";
+/** Marks the hygiene status block inside the consolidated gate comment. */
+const HYGIENE_MARKER = "<!-- pr-hygiene -->";
+/** HTML comment wrapping the hygiene block so it survives gate rebuilds. */
+const HYGIENE_BLOCK_START = "<!-- pr-hygiene-block:start -->";
+const HYGIENE_BLOCK_END = "<!-- pr-hygiene-block:end -->";
+/**
+ * Both delimiters must occupy a complete line. A contributor-controlled
+ * hygiene line (for example a changed filename) can otherwise embed delimiter
+ * text mid-line and corrupt the block boundary on the next rewrite.
+ */
+const HYGIENE_BLOCK_RE = new RegExp(
+  `^[ \\t]*${HYGIENE_BLOCK_START}[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*${HYGIENE_BLOCK_END}[ \\t]*$`,
+  "m"
+);
 
 function inlineCode(value) {
   const text = String(value);
@@ -29,32 +49,112 @@ function readinessChecklistLines(readiness) {
 }
 
 /**
- * The full readiness-message body: marker, serialized state, mirror lines for
- * the tickable boxes, the tick count, and the path-specific extra lines.
+ * The consolidated PR-gate comment body. It is the single always-present bot
+ * message on a contributor PR and carries everything the author needs: current
+ * status, actionable next steps, the readiness-checklist mirror, and the draft
+ * reason. The whole body is rebuilt every run and written exactly once, so it
+ * always reflects the current state and can never be double-edited.
+ *
+ * @param {object} state  serialized gate state (for the embedded marker).
+ * @param {object} opts
+ * @param {string} opts.status  "DRAFT" or "READY".
+ * @param {string} opts.statusReason  one-line why.
+ * @param {string[]} opts.actions  actionable "What to do" lines (rendered as bullets).
+ * @param {object} opts.readiness  extractReviewReadiness result (mirror + tick count).
+ * @param {boolean} opts.checklistRequired
+ * @param {string[]} opts.notices  extra lines (claim/stale/review-requested).
  */
-function buildReadinessCommentBody(state, readiness, extra) {
-  const complete = readiness.present && readiness.complete;
+function buildGateCommentBody(state, opts) {
+  const {
+    status,
+    statusReason,
+    actions = [],
+    readiness,
+    checklistRequired = true,
+    notices = [],
+    hygiene
+  } = opts;
+  const complete = readiness?.present && readiness?.complete;
+  const statusEmoji = status === "READY" ? "✅" : "⏳";
 
   return [
-    READINESS_MARKER,
-    readinessStateMarker(state),
+    GATE_MARKER,
+    gateStateMarker(state),
     "",
-    "## Review readiness checklist",
+    `## ${statusEmoji} ${status}`,
+    statusReason ? `- ${statusReason}` : "",
     "",
-    readiness.present
-      ? "This PR is kept in **draft** until every requirement below is fulfilled. The tickable checklist has been added to your PR description — tick all four boxes there."
-      : "The review readiness checklist is not required for this author.",
+    ...(actions.length > 0
+      ? ["## What to do", "", ...actions.map(line => `- ${line}`), ""]
+      : []),
+    ...(checklistRequired && readiness?.present
+      ? [
+          "## Review readiness checklist",
+          "",
+          ...readinessChecklistLines(readiness),
+          "",
+          complete
+            ? "✅ **4/4** boxes ticked."
+            : `**${readiness.checked}/${readiness.total}** boxes ticked.`,
+          ""
+        ]
+      : []),
+    ...(hygiene && hygiene.length > 0
+      ? [
+          "## Hygiene",
+          "",
+          HYGIENE_BLOCK_START,
+          HYGIENE_MARKER,
+          "",
+          ...hygiene,
+          "",
+          HYGIENE_BLOCK_END,
+          ""
+        ]
+      : []),
+    ...notices
+  ].filter(line => line !== null && line !== undefined);
+}
+
+/**
+ * The hygiene status block as stored inside the consolidated gate comment, or
+ * `null` when the comment has none. The gate rebuilds its body from scratch
+ * every run, so without this round-trip a hygiene update from the separate
+ * hygiene workflow would be silently dropped on the next gate write.
+ */
+function extractHygieneSection(body) {
+  if (typeof body !== "string") return null;
+  const match = body.match(HYGIENE_BLOCK_RE);
+  if (!match) return null;
+  return match[1]
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line !== "" && line !== HYGIENE_MARKER)
+    .join("\n");
+}
+
+/**
+ * Insert (or replace) a hygiene block in a gate-comment body. Used by the
+ * hygiene workflow to write its status into the single consolidated comment
+ * instead of posting a second bot message.
+ */
+function withHygieneSection(body, hygieneLines) {
+  const base = typeof body === "string" ? body : "";
+  const block = [
+    HYGIENE_BLOCK_START,
+    HYGIENE_MARKER,
     "",
-    ...(readiness.present ? readinessChecklistLines(readiness) : []),
+    ...hygieneLines,
     "",
-    readiness.present
-      ? complete
-        ? "✅ **4/4** boxes ticked."
-        : `**${readiness.checked}/${readiness.total}** boxes ticked.`
-      : "",
-    "",
-    ...extra
-  ];
+    HYGIENE_BLOCK_END
+  ].join("\n");
+
+  if (HYGIENE_BLOCK_RE.test(base)) {
+    return base.replace(HYGIENE_BLOCK_RE, block);
+  }
+
+  // No existing block: append one at the end.
+  return `${base.replace(/\s+$/, "")}\n\n## Hygiene\n\n${block}\n`;
 }
 
 function descriptionFailureLines(reason) {
@@ -129,7 +229,7 @@ function buildFailureSections(failures, { pr, allowedBases, defaultBase }) {
     sections.push(
       "⚠️ **UI screenshot required**",
       "",
-      `This pull request mentions ${inlineCode("gui")} in its title or description, so it is treated as a GUI change.`,
+      `This pull request changes files under ${inlineCode("gui/")}, or GitHub returned an incomplete changed-file list for a large diff, so it is treated as a GUI change.`,
       "",
       `@${pr.user.login} Please add a screenshot of the UI change to the description — drag and drop the image into the description editor, or paste a markdown image such as ${inlineCode("![Screenshot](https://example.com/after.png)")}. The check re-runs automatically once the description is edited.`
     );
@@ -178,6 +278,32 @@ function buildClaimCheckNotice(violations, liveHeadSha) {
   return lines;
 }
 
+/**
+ * The notice shown when the gate's own findings check disproves the
+ * Codex/CodeRabbit findings box. `byBot` maps each review-bot login to its
+ * unresolved finding count (inline threads plus, for CodeRabbit, findings it
+ * posted only in its review body because they fell outside the diff range).
+ * The box is unticked and the PR stays a draft until every finding is
+ * resolved.
+ */
+function buildFindingsClaimNotice(byBot) {
+  const names = {
+    "chatgpt-codex-connector[bot]": "Codex",
+    "coderabbitai[bot]": "CodeRabbit"
+  };
+  const lines = [];
+  for (const [login, count] of Object.entries(byBot)) {
+    const label = names[login] ?? login;
+    lines.push(
+      `${label} has ${count} unresolved finding${count === 1 ? "" : "s"}; the **Codex/CodeRabbit findings** box has been unticked.`
+    );
+  }
+  lines.push(
+    "Resolve every open review conversation on this pull request, then re-tick the box."
+  );
+  return lines;
+}
+
 /** The reset notice shown when a completion no longer covers the live head. */
 function buildStaleNotice({ completionHeadSha, liveHeadSha, eventAction }) {
   let lead;
@@ -196,12 +322,19 @@ function buildStaleNotice({ completionHeadSha, liveHeadSha, eventAction }) {
 
 module.exports = {
   READINESS_MARKER,
+  GATE_MARKER,
+  HYGIENE_MARKER,
+  HYGIENE_BLOCK_START,
+  HYGIENE_BLOCK_END,
   inlineCode,
   readinessChecklistLines,
-  buildReadinessCommentBody,
+  buildGateCommentBody,
+  extractHygieneSection,
+  withHygieneSection,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,
   buildStaleNotice,
-  buildClaimCheckNotice
+  buildClaimCheckNotice,
+  buildFindingsClaimNotice
 };

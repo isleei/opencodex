@@ -6,7 +6,7 @@
  * client's config. This one says where it lives, how to tell whether the client
  * is installed at all, and whether a remote bind is safe for it.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §1.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §1.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,8 @@ import {
   hermesHomeDir,
   kimiConfigPath,
   kimiHomeDir,
+  ompAgentDir,
+  ompModelsConfigPath,
   opencodeGlobalConfigPath,
   openclawConfigPath,
   openclawHomeDir,
@@ -67,6 +69,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "pi",
     configPath: (_env = process.env, home = homedir()) => join(home, ".pi", "agent", "models.json"),
     detectDir: (_env = process.env, home = homedir()) => join(home, ".pi"),
+  },
+  omp: {
+    id: "omp",
+    configPath: (env = process.env, home = homedir()) => ompModelsConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => ompAgentDir(env, home),
   },
   hermes: {
     id: "hermes",

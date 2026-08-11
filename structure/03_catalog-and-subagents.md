@@ -25,14 +25,47 @@ On the default `opencodex-catalog.json` path, sync deliberately uses two catalog
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
 preserve routed entries and genuine user-native rows from the file that will be overwritten; a
-bundled catalog never contains those rows.
+bundled catalog never contains those rows. Retained sync and evidence-bound convergence share an
+explicit observed-state merge policy and restore native priorities from the once-only pristine
+backup rather than from a catalog whose priorities may already have been rewritten. A configured
+custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
+warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
+evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
 
-Codex App model picker visibility comes from this shared catalog, not from patching the App.
+The app-server's model list comes from this shared catalog, not from patching the App. Codex Desktop
+may still apply its remote native-only allowlist after `model/list`; an explicitly configured combo
+`nativeAlias` is the bounded compatibility path. It replaces one supported bare native row with a
+routed, labeled row, routes the bare id before canonical OpenAI, and keeps account-qualified native
+selectors genuine. Missing target discovery capabilities inherit the replaced native row's metadata,
+while explicit target limits remain authoritative. Because the affected renderer ignores `visibility: "hide"`, the presence of any
+native alias also omits disabled bare native rows from the effective catalog. Dashboard rows remain
+derived from the static native set, and sync retains bundled/pristine native recovery sources so a
+later re-enable or alias removal restores native metadata.
 
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+
+## Startup readiness
+
+Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
+binds. `handleStart` supplies its gate and transitions it after the shared catalog sync settles.
+Calls without a supplied gate receive a fresh private gate that intentionally remains pending. Only
+`ok: true` with no nonempty warning becomes ready; `null`, a throw, `ok !== true`, or a nonempty
+warning becomes failed. State is isolated per server instance.
+
+Exact unauthenticated `GET /readyz` returns sanitized identity fields plus pending, ready, or failed:
+`200` for ready, or `503` with `Retry-After: 1` for pending and terminal failed. The full CLI syntax
+is `ocx ready [--json] [--wait [--timeout <seconds>]]`. The probe validates the service, version,
+uptime, PID, port, status, and HTTP/status pairing. The default is one probe. With `--wait`, it
+applies one absolute deadline (45 seconds by default) across discovery, readiness probes, polling,
+and sleeps, but exits immediately on terminal failed. `--timeout <seconds>` requires `--wait` and
+accepts positive integer seconds from 1–300. CLI `--json` emits
+`{ready, status, pid, port}`, with status in `ready|pending|failed|unreachable`. Exit 0 means ready;
+exit 1 covers not-ready, pending, failed, timeout, and unreachable; exit 64 means invalid arguments.
+Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains the separate
+liveness contract.
 
 ## Entry shape
 
@@ -63,12 +96,18 @@ Pool mode routes across main plus added Codex credentials. Key rules:
 - **A namespace is a public selector mapped to an internal target.** Generated selectors are how a
   caller names an account — the main login's selector is `main` (collision-suffixed if taken),
   which maps to the config-only sentinel `@main`; the sentinel deliberately sits outside the
-  pool-account id grammar. Selectors must not collide with provider or combo ids
-  (`src/codex/account-namespaces.ts`, `src/codex/account-namespace-match.ts`).
+  pool-account id grammar. Selector initialization requires an explicit opt-in and fills only an
+  absent or empty map; a non-empty user map keeps its object identity and insertion order. Generated
+  selectors avoid provider, combo, routing-policy, and slash-qualified routing-profile namespaces.
+  Collision checks normalize provider and reserved namespace keys, while account and
+  routing-profile selector prefixes are exact-case (`src/codex/account-namespaces.ts`,
+  `src/codex/account-namespace-match.ts`, `src/routing/profile-namespace.ts`).
 - **Selector labels carry no account-role semantics.** When at least one selector is advertisable,
   the Codex catalog clones each supported native row per selector and hides the bare picker rows;
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored
   account targets are not advertised, and private account ids never become catalog labels.
+  `codexAccountPickerEnabled: false` hides generated rows without deleting exact routing bindings;
+  an omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the

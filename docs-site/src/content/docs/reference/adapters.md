@@ -90,8 +90,8 @@ of the HTTP retry loop.
 
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
-- Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
-  `thoughtSignature` values so reasoning continuity survives later turns.
+- Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
+  real `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
@@ -181,8 +181,9 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
-- Keeps `cursor/grok-4.5-fast` as a selectable model while sending Cursor's canonical `grok-4.5`
-  model with separate `effort` and `fast=true` parameters.
+- Sends regular `cursor/grok-4.5` tiers with Cursor's exact live-discovery wire ids
+  (`cursor-grok-4.5-low`, `-medium`, or `-high`). Keeps `cursor/grok-4.5-fast` selectable while
+  sending the canonical `grok-4.5` model with separate `effort` and `fast=true` parameters.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy

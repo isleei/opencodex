@@ -19,6 +19,7 @@ import {
   setCodexIntegrationEnabled,
   setGrokIntegrationEnabled,
   grokIntegrationEnabled,
+  shouldSyncCodexOnStart,
   shouldSyncGrokOnStart,
   syncCodexOnStartIfEnabled,
 } from "../src/codex/desired-state";
@@ -180,10 +181,15 @@ describe("the startup gate", () => {
     const ran = await syncCodexOnStartIfEnabled(
       10100,
       { clientIntegrations: { codex: false } },
-      async () => { calls += 1; },
+      async () => { calls += 1; return undefined; },
     );
-    expect(ran).toBe(false);
+    expect(ran.ran).toBe(false);
     expect(calls).toBe(0);
+  });
+
+  test("the shared sync predicate has the same absent-means-on semantics", () => {
+    expect(shouldSyncCodexOnStart(baseConfig())).toBe(true);
+    expect(shouldSyncCodexOnStart({ ...baseConfig(), clientIntegrations: { codex: false } })).toBe(false);
   });
 
   test("absence, an empty object, and an explicit true all still sync", async () => {
@@ -192,16 +198,16 @@ describe("the startup gate", () => {
       const ran = await syncCodexOnStartIfEnabled(
         10100,
         { clientIntegrations },
-        async () => { calls += 1; },
+        async () => { calls += 1; return undefined; },
       );
-      expect(ran).toBe(true);
+      expect(ran.ran).toBe(true);
       expect(calls).toBe(1);
     }
   });
 
   test("the port reaches the sync", async () => {
     const ports: number[] = [];
-    await syncCodexOnStartIfEnabled(43210, {}, async port => { ports.push(port); });
+    await syncCodexOnStartIfEnabled(43210, {}, async port => { ports.push(port); return undefined; });
     expect(ports).toEqual([43210]);
   });
 
@@ -216,7 +222,10 @@ describe("the startup gate", () => {
       {},
       async () => { throw new Error("provider unreachable"); },
     );
-    expect(ran).toBe(true);
+    expect(ran.ran).toBe(true);
+    // #1046: a failed sync reports no writes, so the caller does not warn.
+    expect(ran.catalogWritten).toBe(false);
+    expect(ran.cacheSynced).toBe(false);
   });
 });
 

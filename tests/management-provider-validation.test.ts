@@ -125,6 +125,25 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider management rejects modelCosts rows with extra fields", () => {
+    const error = providerManagementConfigError("blsc", {
+      adapter: "openai-chat",
+      baseUrl: "https://llmapi.blsc.cn",
+      modelCosts: {
+        "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0, apiKey: "sk-leak" },
+      },
+    });
+    expect(error).toContain("unexpected fields");
+    expect(error).not.toContain("sk-leak");
+    expect(providerManagementConfigError("blsc", {
+      adapter: "openai-chat",
+      baseUrl: "https://llmapi.blsc.cn",
+      modelCosts: {
+        "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      },
+    })).toBeNull();
+  });
+
   test("provider management validates model hosted-tool preferences", () => {
     const provider = {
       adapter: "openai-responses",
@@ -320,6 +339,66 @@ describe("provider management validation", () => {
       expect(await response.json()).toMatchObject({
         error: expect.stringContaining('authMode "forward"'),
       });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider POST overwrite preserves modelCosts when the payload omits it", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const costs = { "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 } };
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-costs",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", modelCosts: costs },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      // The dashboard's add/edit form does not send modelCosts; overwriting the
+      // provider must not silently erase the hand-edited price overlay.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-costs",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["custom-costs"]?.modelCosts).toEqual(costs);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider management accepts modelCosts on the canonical openai provider", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const costs = { "gpt-5.6": { input: 1.2, output: 3.2, cacheRead: 0.12, cacheWrite: 0 } };
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "openai",
+          provider: { ...canonicalDirect, codexAccountMode: "pool", modelCosts: costs },
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(loadConfig().providers.openai?.modelCosts).toEqual(costs);
     } finally {
       await server.stop(true);
     }
@@ -1067,6 +1146,69 @@ describe("provider management validation", () => {
 
       const caps = await fetch(new URL("/api/provider-context-caps", server.url));
       expect(await caps.json()).toMatchObject({ caps: {} });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider deletion removes that provider's custom models (#1273)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+        removable: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.removable.test/v1",
+          apiKey: "sk-removable",
+        },
+      },
+      customModels: [
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+        { id: "drop-1", provider: "removable", modelId: "ghost-model" },
+      ],
+      // Seeded so the assertion below covers the real persistence path, not just
+      // the helper: `projectCustomModelCatalogMigration` runs inside the save and
+      // must carry this marker through a provider delete unchanged.
+      customModelCatalogMigration: {
+        version: 1,
+        legacyOwnedSlugs: ["removable/ghost-model", "test-openai/kept-model"],
+      },
+    } as unknown as Parameters<typeof saveConfig>[0]);
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=removable", server.url), {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ success: true, droppedCustomModels: 1 });
+
+      // The dashboard model page reads this route; a surviving row here is the
+      // ghost model users see pointing at a provider that no longer exists.
+      const customModels = await fetch(new URL("/api/custom-models", server.url));
+      expect(await customModels.json()).toEqual([
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+      ]);
+
+      const persisted = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as {
+        customModels?: unknown;
+        customModelCatalogMigration?: unknown;
+      };
+      expect(persisted.customModels).toEqual([
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+      ]);
+      expect(persisted.customModelCatalogMigration).toEqual({
+        version: 1,
+        legacyOwnedSlugs: ["removable/ghost-model", "test-openai/kept-model"],
+      });
     } finally {
       await server.stop(true);
     }
@@ -1973,6 +2115,97 @@ describe("provider management validation", () => {
     // Unknown-only bodies are rejected.
     expect((await patch("extra", { bogus: 1 }))?.status).toBe(400);
   });
+
+  test("provider management exposes and persists context-window hints for Models GUI (#1073)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example.test/v1",
+          apiKey: "sk-existing",
+          models: ["wide", "narrow"],
+          contextWindow: 256_000,
+          modelContextWindows: { narrow: 64_000 },
+        },
+      },
+    };
+    saveConfig(liveConfig);
+
+    const request = async (method: "GET" | "PATCH", body?: unknown) => {
+      const req = new Request("http://127.0.0.1/api/providers?name=relay", {
+        method,
+        headers: body === undefined ? undefined : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+      });
+    };
+
+    const listed = await request("GET");
+    expect(listed?.status).toBe(200);
+    const rows = await listed!.json() as Array<{
+      name: string;
+      contextWindow?: number;
+      modelContextWindows?: Record<string, number>;
+    }>;
+    expect(rows.find(row => row.name === "relay")).toMatchObject({
+      contextWindow: 256_000,
+      modelContextWindows: { narrow: 64_000 },
+    });
+
+    const updated = await request("PATCH", {
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000 },
+    });
+    expect(updated?.status).toBe(200);
+    expect(liveConfig.providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+    expect(loadConfig().providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+
+    for (const invalid of [
+      { contextWindow: 0 },
+      { contextWindow: 1.5 },
+      // `Number.isInteger(1e100)` is true, so an integer check alone lets this through. It
+      // would then serialize into the catalog as an enormous number and can make Codex reject
+      // the whole file — the failure surfaces far from the PATCH that caused it.
+      { contextWindow: 1e100 },
+      { modelContextWindows: { wide: 1e100 } },
+      { modelContextWindows: { "": 100_000 } },
+      { modelContextWindows: { wide: -1 } },
+    ]) {
+      expect((await request("PATCH", invalid))?.status).toBe(400);
+    }
+    expect(liveConfig.providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+
+    expect((await request("PATCH", { modelContextWindows: { wide: null } }))?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelContextWindows).toEqual({ narrow: 64_000 });
+
+    const cleared = await request("PATCH", {
+      contextWindow: null,
+      modelContextWindows: null,
+    });
+    expect(cleared?.status).toBe(200);
+    expect(liveConfig.providers.relay.contextWindow).toBeUndefined();
+    expect(liveConfig.providers.relay.modelContextWindows).toBeUndefined();
+  });
+
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
@@ -2282,7 +2515,8 @@ describe("provider management validation", () => {
       const initial = await fetch(new URL("/api/provider-context-caps", server.url));
       expect(await initial.json()).toMatchObject({ cap: 350_000, value: 350_000, caps: {} });
 
-      // Enable one provider, then change the global value: the enabled provider re-points.
+      // Enable one provider, then change the global value WITHOUT setAll: the enabled provider
+      // keeps its own value and only the shared default changes.
       await fetch(new URL("/api/provider-context-caps", server.url), {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -2294,7 +2528,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ value: 500_000 }),
       });
       expect(valued.status).toBe(200);
-      expect(await valued.json()).toMatchObject({ ok: true, value: 500_000, caps: { "test-openai": 500_000 } });
+      expect(await valued.json()).toMatchObject({ ok: true, value: 500_000, caps: { "test-openai": 350_000 } });
 
       // Enabling another provider now uses the current global value, not the constant.
       const enabledAfter = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2302,12 +2536,20 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider: "other", enabled: true }),
       });
-      expect(await enabledAfter.json()).toMatchObject({ caps: { "test-openai": 500_000, other: 500_000 } });
+      expect(await enabledAfter.json()).toMatchObject({ caps: { "test-openai": 350_000, other: 500_000 } });
 
-      // Catalog reflects the global value.
+      // Catalog reflects each provider's own cap, not the shared default.
       const models = await fetch(new URL("/api/models", server.url));
       const body = await models.json() as Array<{ id: string; contextWindow?: number; contextCap?: number }>;
-      expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 500_000, contextCap: 500_000 });
+      expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 350_000, contextCap: 350_000 });
+
+      // Changing the global value WITH setAll re-points every enabled provider.
+      const valuedAll = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 600_000, setAll: true }),
+      });
+      expect(await valuedAll.json()).toMatchObject({ ok: true, value: 600_000, caps: { "test-openai": 600_000, other: 600_000 } });
 
       // Set-all off clears every cap.
       const cleared = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2315,7 +2557,7 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ setAll: false }),
       });
-      expect(await cleared.json()).toMatchObject({ ok: true, value: 500_000, caps: {} });
+      expect(await cleared.json()).toMatchObject({ ok: true, value: 600_000, caps: {} });
 
       // Set-all on caps every provider at the current value.
       const all = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2323,7 +2565,29 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ setAll: true }),
       });
-      expect(await all.json()).toMatchObject({ ok: true, caps: { "test-openai": 500_000, other: 500_000 } });
+      expect(await all.json()).toMatchObject({ ok: true, caps: { "test-openai": 600_000, other: 600_000 } });
+
+      // Per-provider PUT with an explicit value touches only that provider.
+      const perProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 250_000 }),
+      });
+      expect(await perProvider.json()).toMatchObject({ ok: true, caps: { "test-openai": 250_000, other: 600_000 } });
+
+      // Enabling a provider with an explicit value uses that value, not the global default.
+      const perProviderDisable = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: false }),
+      });
+      expect(await perProviderDisable.json()).toMatchObject({ ok: true, caps: { other: 600_000 } });
+      const perProviderEnableValue = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 128_000 }),
+      });
+      expect(await perProviderEnableValue.json()).toMatchObject({ ok: true, caps: { "test-openai": 128_000, other: 600_000 } });
 
       // Invalid global value is rejected.
       const bad = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2332,6 +2596,80 @@ describe("provider management validation", () => {
         body: JSON.stringify({ value: 0 }),
       });
       expect(bad.status).toBe(400);
+
+      // Invalid per-provider value is rejected before mutating config: the provider cap
+      // must not fall back to the global default.
+      const badPerProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 0 }),
+      });
+      expect(badPerProvider.status).toBe(400);
+      const afterBadPerProvider = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadPerProvider.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A non-boolean setAll accompanying a global value is rejected before mutating config.
+      const badSetAll = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 700_000, setAll: "yes" }),
+      });
+      expect(badSetAll.status).toBe(400);
+      const afterBadSetAll = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadSetAll.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A provider field with a wrongly-typed enabled must not fall through to the global
+      // value branch and change the global default.
+      const badEnabled = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: "yes", value: 700_000 }),
+      });
+      expect(badEnabled.status).toBe(400);
+      const afterBadEnabled = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadEnabled.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A provider update combined with setAll is rejected instead of silently ignoring setAll.
+      const mixedPayload = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, setAll: true }),
+      });
+      expect(mixedPayload.status).toBe(400);
+      const afterMixedPayload = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterMixedPayload.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A per-provider value that floors to zero (0.5) is rejected without mutating config:
+      // it must not silently fall back to the global default.
+      const floorZeroPerProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 0.5 }),
+      });
+      expect(floorZeroPerProvider.status).toBe(400);
+      const afterFloorZeroPerProvider = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterFloorZeroPerProvider.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A global value that floors to zero is rejected the same way.
+      const floorZeroGlobal = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 0.5 }),
+      });
+      expect(floorZeroGlobal.status).toBe(400);
+      const afterFloorZeroGlobal = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterFloorZeroGlobal.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A non-object body (valid JSON) is rejected with 400 instead of crashing on
+      // property access.
+      const nonObject = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify([1, 2, 3]),
+      });
+      expect(nonObject.status).toBe(400);
+      const afterNonObject = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterNonObject.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
     } finally {
       await server.stop(true);
     }

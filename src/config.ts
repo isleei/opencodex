@@ -27,8 +27,16 @@ import {
   isValidCodexAccountNamespaceTarget,
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
+import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
+import {
+  adoptCustomModelCatalogMigration,
+  projectCustomModelCatalogMigration,
+} from "./codex/custom-model-catalog-migration";
+import { parseAccountPriority } from "./codex/pool-rotation";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import { routingProfileIssues } from "./routing/profile";
+import { POLICY_NAMESPACE } from "./routing/profile-namespace";
 import {
   forgetEphemeralSecretPath,
   hardenSecretDir,
@@ -38,8 +46,13 @@ import {
 } from "./lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
+import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
+import {
+  resolveTrustedWindowsPowerShellExe,
+  resolveTrustedWindowsSystemDirectory,
+} from "./lib/windows-elevation";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
   isWirePinnedModel,
@@ -51,6 +64,7 @@ import {
   type OcxConfig,
   type OcxApiKeyEntry,
   type OcxProviderConfig,
+  type ProviderCostOverlay,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import {
@@ -61,6 +75,13 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import {
+  COST4_RATE_KEYS,
+  isValidCost4Rate,
+  refreshUserCostOverlays,
+  withPreservedDiskOnlyProviders,
+} from "./usage/user-cost-overlays";
+import { MAX_COST4_RATE } from "./usage/expected-prices";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
@@ -604,6 +625,7 @@ const providerConfigSchema = z.object({
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
+  requiresAdjacentResponsesToolResults: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
@@ -688,6 +710,75 @@ export function providerHeadersConfigError(headers: unknown): string | null {
     if (/[\r\n]/.test(value)) return `header "${name}" value must not include line breaks`;
   }
   return null;
+}
+
+/**
+ * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model
+ * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
+ * Returns null when valid/absent, else a human-readable error.
+ */
+export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `${field} must be a plain object keyed by model id`;
+  }
+  for (const [modelId, entry] of Object.entries(value)) {
+    if (!modelId.trim()) return `${field} keys must be nonblank model ids`;
+    // Redact secret-shaped model ids and JSON-escape control characters so a
+    // malformed write cannot echo a pasted key/secret back through the
+    // management API response.
+    const safeModelId = JSON.stringify(redactSecretString(modelId));
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return `${field}.${safeModelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
+    }
+    const rates = entry as Record<string, unknown>;
+    for (const key of COST4_RATE_KEYS) {
+      const rate = rates[key];
+      if (!isValidCost4Rate(rate)) {
+        return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
+      }
+    }
+    // Reject unknown fields: a misplaced apiKey/apiKeyPool under a cost row
+    // would otherwise be persisted and echoed verbatim by display paths that
+    // mask only top-level provider secrets.
+    const extraKeys = Object.keys(rates)
+      .filter((key) => !(COST4_RATE_KEYS as readonly string[]).includes(key));
+    if (extraKeys.length > 0) {
+      return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, and cacheWrite are allowed (USD per 1M tokens)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Serialize `providers.<name>.modelCosts` for display: copy ONLY the four
+ * numeric rate fields per model and DROP secret-shaped model ids, so a pasted
+ * API key in a key position cannot be echoed back by CLI/DTO display paths.
+ * The result uses a null prototype so "__proto__" remains an own row.
+ */
+export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
+  if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
+  const out = Object.create(null) as Record<string, ProviderCostOverlay>;
+  for (const [modelId, entry] of Object.entries(costs)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const rates = entry as Record<string, unknown>;
+    const input = rates.input;
+    const output = rates.output;
+    const cacheRead = rates.cacheRead;
+    const cacheWrite = rates.cacheWrite;
+    if (
+      isValidCost4Rate(input)
+      && isValidCost4Rate(output)
+      && isValidCost4Rate(cacheRead)
+      && isValidCost4Rate(cacheWrite)
+    ) {
+      // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
+      // distinct rows cannot collapse into one placeholder key.
+      if (redactSecretString(modelId) !== modelId) continue;
+      out[modelId] = { input, output, cacheRead, cacheWrite };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
@@ -944,6 +1035,33 @@ const codexAccountNamespacesSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), z.string()));
 
+const CODEX_ACCOUNT_PRIORITIES_RECORD_ERROR =
+  "codexAccountPriorities must be a plain object mapping Codex account ids to selection-order integers";
+const CODEX_ACCOUNT_PRIORITY_KEY_ERROR =
+  "selection-order keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+const CODEX_ACCOUNT_PRIORITY_VALUE_ERROR =
+  "selection order must be an integer between -100 and 100";
+
+const CODEX_ACCOUNT_PIN_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
+
+const codexAccountPrioritiesSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: CODEX_ACCOUNT_PRIORITIES_RECORD_ERROR },
+).superRefine((priorities, ctx) => {
+  // Inspect raw own entries before z.record parses them; Zod omits __proto__ record keys.
+  for (const [accountId, priority] of Object.entries(priorities)) {
+    if (!isCodexAccountPriorityKey(accountId)) {
+      ctx.addIssue({ code: "custom", path: [accountId], message: CODEX_ACCOUNT_PRIORITY_KEY_ERROR });
+    }
+    if (parseAccountPriority(priority) === null) {
+      ctx.addIssue({ code: "custom", path: [accountId], message: CODEX_ACCOUNT_PRIORITY_VALUE_ERROR });
+    }
+  }
+}).pipe(z.record(z.string(), z.number().int()));
+
 /**
  * Deliberately permissive. A user's config is not ours to invalidate: a strict
  * entry fails the whole parse, and loadConfig's fallback then backs the file up
@@ -986,11 +1104,18 @@ const apiKeyEntrySchema = z.object({
 const clientIntegrationsSchema = z.object({
   codex: z.boolean().optional().catch(undefined),
   grok: z.boolean().optional().catch(undefined),
+  "claude-desktop": z.boolean().optional().catch(undefined),
 }).passthrough();
 
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
+  // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
+  upstreamHostCircuitThreshold: z.number().int()
+    .min(0)
+    .max(UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD)
+    .optional()
+    .catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)
@@ -1003,12 +1128,19 @@ const configSchema = z.object({
   // is safe: startServer() already falls back to 127.0.0.1 for a missing hostname. Write-time
   // rejection lives in validateConfigCandidate() so bad values still surface to the caller.
   hostname: z.string().trim().min(1).optional().catch(undefined),
+  // Discriminated on `enabled` so a disabled entry cannot be forced to carry a port, and an
+  // enabled one cannot omit it (#1102). A malformed value degrades to undefined rather than
+  // failing the whole parse: this is an opt-in convenience surface, and a hand-edit typo here
+  // must never reset providers/apiKeys through the backup-and-defaults repair path.
+  unauthenticatedLoopbackListener: z.union([
+    z.object({ enabled: z.literal(false) }),
+    z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535) }),
+  ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
-  // Invalid hand edits must not discard an otherwise usable config. Treat them as
-  // pre-migration so startup can safely re-run the one-time normalization.
-  googleAntigravityStaticCatalogVersion: z.literal(1).optional().catch(undefined),
+  // Invalid hand edits must not discard an otherwise usable config.
+  googleAntigravityStaticCatalogVersion: z.union([z.literal(1), z.literal(2)]).optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
@@ -1020,9 +1152,24 @@ const configSchema = z.object({
   injectionModel: z.string().optional().catch(undefined),
   injectionEffort: z.string().optional().catch(undefined),
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
+  // Per-primary-model fallback chains. Values must be non-empty string arrays;
+  // malformed entries degrade to undefined rather than rejecting the whole config.
+  subagentModelFallbackByModel: z.record(
+    z.string(),
+    z.array(z.string().trim().min(1)).min(1),
+  ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
+  // Selection order is a preference, not a safety control like pause: a malformed
+  // map degrades to "no ordering" rather than failing the parse, so a hand-edited
+  // typo cannot trip the backup-and-defaults repair path and wipe providers or
+  // pool accounts. Warning emitted in loadConfig.
+  codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
+  // A malformed hand edit must degrade to false without discarding providers, accounts,
+  // or the exact selector map. Live writes remain strict.
+  codexAccountPickerEnabled: z.boolean().optional().catch(false),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
@@ -1075,6 +1222,7 @@ const configSchema = z.object({
     const configuredProviderNamespaces = new Set([
       COMBO_NAMESPACE,
       OPENAI_CODEX_PROVIDER_ID,
+      POLICY_NAMESPACE,
       ...Object.keys(config.providers),
     ].map(codexProviderNamespaceKey));
     const namespaceTargets = new Set(
@@ -1086,7 +1234,7 @@ const configSchema = z.object({
         ctx.addIssue({
           code: "custom",
           path: ["codexAccountNamespaces", namespace],
-          message: "account selectors must not collide with configured provider or combo namespaces",
+          message: "account selectors must not collide with configured provider, combo, or routing policy namespaces",
         });
       }
       if (configuredAccountIds.has(namespace) || namespaceTargets.has(namespace)) {
@@ -1102,7 +1250,7 @@ const configSchema = z.object({
     if (!isValidProviderName(name)) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name],
+        path: ["providers", redactSecretString(name)],
         message: "provider names must use letters, numbers, dot, underscore, or hyphen and cannot be reserved JavaScript object keys or routing namespaces (policy)",
       });
     }
@@ -1113,7 +1261,7 @@ const configSchema = z.object({
         code: "custom",
         path: [
           "providers",
-          name,
+          redactSecretString(name),
           openRouterRoutingError.startsWith("modelOpenRouterRouting")
             ? "modelOpenRouterRouting"
             : "openRouterRouting",
@@ -1124,7 +1272,7 @@ const configSchema = z.object({
     if (Object.hasOwn(provider, "virtualModels")) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "virtualModels"],
+        path: ["providers", redactSecretString(name), "virtualModels"],
         message: "virtualModels is registry-only and must not be persisted",
       });
     }
@@ -1132,7 +1280,7 @@ const configSchema = z.object({
     if (baseUrlError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "baseUrl"],
+        path: ["providers", redactSecretString(name), "baseUrl"],
         message: baseUrlError,
       });
     } else {
@@ -1140,7 +1288,7 @@ const configSchema = z.object({
       if (destinationError) {
         ctx.addIssue({
           code: "custom",
-          path: ["providers", name, "baseUrl"],
+          path: ["providers", redactSecretString(name), "baseUrl"],
           message: destinationError,
         });
       }
@@ -1149,7 +1297,7 @@ const configSchema = z.object({
     if (responsesPathError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "responsesPath"],
+        path: ["providers", redactSecretString(name), "responsesPath"],
         message: responsesPathError,
       });
     }
@@ -1157,15 +1305,25 @@ const configSchema = z.object({
     if (headersError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "headers"],
+        path: ["providers", redactSecretString(name), "headers"],
         message: headersError,
+      });
+    }
+    const modelCostsError = providerModelCostsConfigError((provider as { modelCosts?: unknown }).modelCosts);
+    if (modelCostsError) {
+      ctx.addIssue({
+        code: "custom",
+        // The provider key is caller-controlled and can be token-shaped; redact it
+        // before schemaDiagnosticsError serializes the path (ocx config validate/import).
+        path: ["providers", redactSecretString(name), "modelCosts"],
+        message: modelCostsError,
       });
     }
     const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
     if (apiKeyTransportError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "apiKeyTransport"],
+        path: ["providers", redactSecretString(name), "apiKeyTransport"],
         message: apiKeyTransportError,
       });
     }
@@ -1178,7 +1336,7 @@ const configSchema = z.object({
     if (modelAdaptersError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelAdapters"],
+        path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
     }
@@ -1191,7 +1349,7 @@ const configSchema = z.object({
     if (preferHostedToolsError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelPreferHostedTools"],
+        path: ["providers", redactSecretString(name), "modelPreferHostedTools"],
         message: preferHostedToolsError,
       });
     }
@@ -1202,7 +1360,7 @@ const configSchema = z.object({
     if (maxInputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelMaxInputTokens"],
+        path: ["providers", redactSecretString(name), "modelMaxInputTokens"],
         message: maxInputError,
       });
     }
@@ -1213,7 +1371,7 @@ const configSchema = z.object({
     if (reasoningSummariesError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelSupportsReasoningSummaries"],
+        path: ["providers", redactSecretString(name), "modelSupportsReasoningSummaries"],
         message: reasoningSummariesError,
       });
     }
@@ -1224,7 +1382,7 @@ const configSchema = z.object({
     if (reasoningSummaryDeliveryError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelReasoningSummaryDelivery"],
+        path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
       });
     }
@@ -1235,7 +1393,7 @@ const configSchema = z.object({
     if (defaultMaxOutputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "defaultMaxOutputTokens"],
+        path: ["providers", redactSecretString(name), "defaultMaxOutputTokens"],
         message: defaultMaxOutputError,
       });
     }
@@ -1246,7 +1404,7 @@ const configSchema = z.object({
     if (maxOutputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelMaxOutputTokens"],
+        path: ["providers", redactSecretString(name), "modelMaxOutputTokens"],
         message: maxOutputError,
       });
     }
@@ -1261,7 +1419,7 @@ const configSchema = z.object({
       if (!canonicalOpenAiShape) {
         ctx.addIssue({
           code: "custom",
-          path: ["providers", name, "codexAccountMode"],
+          path: ["providers", redactSecretString(name), "codexAccountMode"],
           message: "codexAccountMode is valid only on the canonical built-in openai provider",
         });
       }
@@ -1480,6 +1638,54 @@ export function retryOn429PolicyConfigError(policy: unknown): string | null {
 }
 
 /**
+ * Load-time degradation for `providers.<name>.modelCosts`, mirroring
+ * {@link sanitizeRetryOn429ForLoad}. A hand-edited malformed display-price row
+ * must not fail the whole config parse — that would back up config.json and
+ * fall back to defaults, dropping otherwise valid providers and the default
+ * route for a typo in a non-runtime display field. Invalid rows are dropped
+ * with a warning; strict rejection stays at the management/write boundary
+ * (providerManagementConfigError).
+ */
+function sanitizeModelCostsForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const providers = root.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    // Runs before schema validation, so the provider name is untrusted: redact
+    // secret-shaped names and JSON-escape control characters for the warning.
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    const costs = p.modelCosts;
+    if (costs === undefined) continue;
+    if (!costs || typeof costs !== "object" || Array.isArray(costs)) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts (${typeof costs}) is invalid — ignoring the overlay`);
+      continue;
+    }
+    const costsRecord = costs as Record<string, unknown>;
+    const hadEntries = Object.keys(costsRecord).length > 0;
+    let kept = 0;
+    for (const [modelId, entry] of Object.entries(costsRecord)) {
+      // Reuse the shared per-row shape contract so the load-time sanitizer
+      // cannot drift from the schema and the write boundary.
+      if (providerModelCostsConfigError({ [modelId]: entry }) === null) {
+        kept++;
+        continue;
+      }
+      delete costsRecord[modelId];
+      // Redact the model id: a hand-edit can place a secret in a key name.
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts.${JSON.stringify(redactSecretString(modelId))} is invalid — ignoring the row`);
+    }
+    if (hadEntries && kept === 0) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
+    }
+  }
+}
+
+/**
  * Companion to {@link warnDegradedStreamMode} for a blank persisted `hostname`. The bind
  * falls back to loopback, which is the safe direction but not what the file asked for —
  * say so once instead of silently ignoring the field.
@@ -1489,6 +1695,32 @@ function warnDegradedHostname(rawParsed: unknown, validated: OcxConfig): void {
   const raw = (rawParsed as Record<string, unknown>).hostname;
   if (raw !== undefined && validated.hostname === undefined) {
     console.warn(`⚠️  config.json hostname ${JSON.stringify(raw)} is not a usable bind address — falling back to 127.0.0.1`);
+  }
+}
+
+/**
+ * Companion to {@link warnDegradedStreamMode} for a malformed selection-order map.
+ * Priority is a preference, so the schema drops the whole map rather than failing
+ * the parse — say so once, otherwise the pool silently reverts to flat ordering.
+ */
+function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validated: OcxConfig): string[] {
+  const record = rawConfigRecord(rawParsed);
+  const warnings: string[] = [];
+  // The pin degrades silently otherwise, which reads as the manual selection simply
+  // not having survived the restart.
+  if (record?.activeCodexAccountPinned !== undefined && validated.activeCodexAccountPinned === undefined) {
+    warnings.push("activeCodexAccountPinned is not a valid account id — the manually selected account is no longer pinned");
+  }
+  const raw = record?.codexAccountPriorities;
+  if (raw !== undefined && validated.codexAccountPriorities === undefined) {
+    warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
+  }
+  return warnings;
+}
+
+function warnDegradedCodexAccountPriorities(rawParsed: unknown, validated: OcxConfig): void {
+  for (const warning of degradedCodexAccountPriorityWarnings(rawParsed, validated)) {
+    console.warn(`⚠️  config.json ${warning}`);
   }
 }
 
@@ -1620,6 +1852,23 @@ function warnDegradedClaudeSubagentEffort(rawParsed: unknown): void {
   }
 }
 
+function malformedUpstreamHostCircuitThresholdWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "upstreamHostCircuitThreshold")) return null;
+  const threshold = raw.upstreamHostCircuitThreshold;
+  if (threshold === undefined) return null;
+  if (typeof threshold === "number"
+    && Number.isInteger(threshold)
+    && threshold >= 0
+    && threshold <= UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD) return null;
+  return `upstreamHostCircuitThreshold ignored: expected an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
+}
+
+function warnDegradedUpstreamHostCircuitThreshold(rawParsed: unknown): void {
+  const warning = malformedUpstreamHostCircuitThresholdWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
 
 function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
@@ -1647,6 +1896,18 @@ function malformedNativeSubagentFields(rawParsed: unknown): NativeSubagentPersis
 function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField): string {
   const expected = field === "syncCodexSubagentDefaults" ? "a boolean" : "a string";
   return `${field} ignored: expected ${expected}`;
+}
+
+function malformedCodexAccountPickerWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPickerEnabled")) return null;
+  if (typeof raw.codexAccountPickerEnabled === "boolean") return null;
+  return "codexAccountPickerEnabled ignored: expected a boolean";
+}
+
+function warnDegradedCodexAccountPicker(rawParsed: unknown): void {
+  const warning = malformedCodexAccountPickerWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
 function nativeSubagentSyncDisabledReason(config: OcxConfig, rawParsed?: unknown): string | null {
@@ -1678,6 +1939,13 @@ function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig)
   }
 }
 
+/**
+ * Load and validate config.json into an OcxConfig. Missing files reset to
+ * defaults and clear stale overlays. Broken existing files also fall back to
+ * default routing (after backup), but keep the last-good cost-overlay registry
+ * until a valid config or a genuinely missing file is observed. A partially-
+ * invalid config is merged with defaults so providers and pool accounts survive.
+ */
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -1685,21 +1953,25 @@ export function loadConfig(): OcxConfig {
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
       warnDegradedStreamMode(parsed, config);
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
+      warnDegradedCodexAccountPriorities(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      warnDegradedCodexAccountPicker(parsed);
+      warnDegradedUpstreamHostCircuitThreshold(parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -1716,9 +1988,12 @@ export function loadConfig(): OcxConfig {
       const config = normalizeApiKeyIds(retryResult.data as OcxConfig);
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
+      warnDegradedCodexAccountPriorities(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      warnDegradedCodexAccountPicker(parsed);
+      warnDegradedUpstreamHostCircuitThreshold(parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
@@ -1727,6 +2002,12 @@ export function loadConfig(): OcxConfig {
     warnAndBackupInvalidConfig(configPath, error);
     return getDefaultConfig();
   }
+}
+
+/** Refresh the user cost-overlay registry from `config` and return it unchanged. */
+function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
+  refreshUserCostOverlays(config);
+  return config;
 }
 
 export type ConfigDiagnostics = {
@@ -1762,10 +2043,15 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
   const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
+  warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
     warnings.push(`claudeCode.subagentEffort ignored: expected one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`);
   }
   warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
+  const pickerWarning = malformedCodexAccountPickerWarning(rawParsed);
+  if (pickerWarning) warnings.push(pickerWarning);
+  const hostCircuitWarning = malformedUpstreamHostCircuitThresholdWarning(rawParsed);
+  if (hostCircuitWarning) warnings.push(hostCircuitWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -1835,20 +2121,117 @@ function appOwnedMemoryBudgetError(value: unknown): string | null {
   return null;
 }
 
+function upstreamHostCircuitThresholdError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamHostCircuitThreshold")) return null;
+  const threshold = raw.upstreamHostCircuitThreshold;
+  if (threshold === undefined) return null;
+  if (typeof threshold === "number"
+    && Number.isInteger(threshold)
+    && threshold >= 0
+    && threshold <= UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD) return null;
+  return `schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
+}
+
+/**
+ * Same reasoning as {@link blankHostnameError}, and more urgent: the read path degrades a
+ * malformed selection-order map to undefined, which on a write would drop every entry the
+ * user had accumulated and still report success. A load-time degrade leaves the raw map in
+ * the file to be repaired by hand; a degraded write erases it. One bad `ocx config set`
+ * must not cost the whole map, so a live caller is told instead.
+ */
+function codexAccountPrioritiesError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw) return null;
+  if (raw.codexAccountPriorities !== undefined) {
+    const parsed = codexAccountPrioritiesSchema.safeParse(raw.codexAccountPriorities);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
+    }
+  }
+  // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a
+  // coercing guard waves a non-string pin through to the schema, where `.catch(undefined)`
+  // drops it and reports the write as a success — the exact silent-degrade this guards.
+  const pin = raw.activeCodexAccountPinned;
+  if (pin !== undefined && (typeof pin !== "string" || !CODEX_ACCOUNT_PIN_PATTERN.test(pin))) {
+    return "schema_invalid: activeCodexAccountPinned: must be an account id";
+  }
+  return null;
+}
+
 function googleAntigravityStaticCatalogVersionError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "googleAntigravityStaticCatalogVersion")) return null;
   const version = raw.googleAntigravityStaticCatalogVersion;
-  if (version === undefined || version === 1) return null;
-  return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1 or omitted";
+  if (version === undefined || version === 1 || version === 2) return null;
+  return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted";
+}
+
+function codexAccountPickerEnabledError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(raw, "codexAccountPickerEnabled");
+  if (!descriptor) {
+    return "codexAccountPickerEnabled" in raw
+      ? "schema_invalid: codexAccountPickerEnabled: must be an own boolean data property or omitted"
+      : null;
+  }
+  if (!("value" in descriptor)) {
+    return "schema_invalid: codexAccountPickerEnabled: must be an own boolean data property or omitted";
+  }
+  const enabled = descriptor.value;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: codexAccountPickerEnabled: must be a boolean or omitted";
 }
 
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
+/**
+ * Reject a loopback-listener port that collides with the proxy port (#1102).
+ *
+ * The schema can only check the shape of each field on its own; the two ports being distinct
+ * is a relationship between them. Letting the pair through would surface as a startup failure
+ * after the public listener already bound, which reads like an unrelated port conflict.
+ *
+ * This is write-time only, matching `blankHostnameError`: a live caller can be told the value
+ * is wrong, whereas a hand-edited config on the read path degrades to undefined rather than
+ * resetting the whole file.
+ */
+function loopbackListenerPortError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const listener = (value as Record<string, unknown>).unauthenticatedLoopbackListener;
+  if (listener === undefined) return null;
+  if (!listener || typeof listener !== "object" || Array.isArray(listener)) {
+    return "schema_invalid: unauthenticatedLoopbackListener: must be an object or omitted";
+  }
+  const entry = listener as Record<string, unknown>;
+  // `enabled` must be a real boolean. The schema's `.catch(undefined)` would otherwise DELETE
+  // a `"true"` string entry and report success, leaving an operator convinced they enabled an
+  // unauthenticated listener that is in fact off. Load-time still degrades quietly — a hand
+  // edit must not reset the file — but a live caller gets told.
+  if (typeof entry.enabled !== "boolean") {
+    return "schema_invalid: unauthenticatedLoopbackListener.enabled: must be a boolean";
+  }
+  if (entry.enabled !== true) return null;
+  const listenerPort = entry.port;
+  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
+    return "schema_invalid: unauthenticatedLoopbackListener.port: must be an integer port when enabled";
+  }
+  const proxyPort = (value as Record<string, unknown>).port;
+  if (typeof proxyPort === "number" && proxyPort === listenerPort) {
+    return "schema_invalid: unauthenticatedLoopbackListener.port: must differ from the proxy port";
+  }
+  return null;
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
-    ?? googleAntigravityStaticCatalogVersionError(value);
+    ?? upstreamHostCircuitThresholdError(value)
+    ?? googleAntigravityStaticCatalogVersionError(value)
+    ?? codexAccountPrioritiesError(value)
+    ?? codexAccountPickerEnabledError(value)
+    ?? loopbackListenerPortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };
@@ -1862,6 +2245,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);
@@ -2145,23 +2529,48 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
   }
 };
 
+/**
+ * Atomic config.json write WITHOUT the mutation lock; callers must hold
+ * `withConfigMutationLockSync`. Returns true when bytes changed. Refreshes the
+ * cost-overlay registry from the persisted config so runtime estimates follow
+ * every save path.
+ */
 function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
-  const bytes = JSON.stringify(config, null, 2) + "\n";
+  // External editors can add provider rows the live config deliberately does
+  // not route with yet; merge them at the serialization boundary so an
+  // unrelated in-process save cannot erase the provider or its overlay.
+  const persisted = withPreservedDiskOnlyProviders(config);
+  const bytes = JSON.stringify(persisted, null, 2) + "\n";
+  let unchanged = false;
   try {
-    if (readFileSync(configPath, "utf8") === bytes) return false;
+    unchanged = readFileSync(configPath, "utf8") === bytes;
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
+  // Keep the runtime overlay registry in sync with EVERY persist path,
+  // including byte-identical saves: a cooperating CLI process may have written
+  // the same bytes (e.g. before a proxy notification), and Logs/Usage must
+  // adopt the overlay without waiting for a changed save or restart.
+  if (unchanged) {
+    refreshUserCostOverlays(persisted);
+    return false;
+  }
   atomicWriteFile(configPath, bytes);
+  // For changed saves, refresh only AFTER the write succeeded so a failed
+  // write cannot leave estimates reflecting configuration never persisted.
+  refreshUserCostOverlays(persisted);
   return true;
 }
 
+/** Persist `config` to config.json under the config-mutation lock. */
 export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
-    if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
+    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), config);
+    if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+    adoptCustomModelCatalogMigration(config, projected);
   });
 }
 
@@ -2242,7 +2651,11 @@ export function mutatePersistedConfig<T>(
         continue;
       }
 
-      if (persistConfigUnlocked(confirmedConfig)) bumpGenerationForCooperatingConfigWrite();
+      const projected = projectCustomModelCatalogMigration(
+        commitBase.diagnostics.config,
+        confirmedConfig,
+      );
+      if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -2425,6 +2838,10 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   }
+  // The reconciliation may have adopted a providers.<name>.modelCosts edit made
+  // by a cooperating process while the OAuth login was pending; keep the overlay
+  // registry (and the usage-cache overlay version) in sync with the live config.
+  refreshUserCostOverlays(config);
 }
 
 /** The literal file, with no schema merge or default injection. */
@@ -2480,9 +2897,9 @@ function readPersistedServerBinding(
 export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   withConfigMutationLockSync(() => {
     const bindingBaseline = persistedLiveServerBinding.get(config);
-    const onDisk = claudeCodeBaseline.has(config) || bindingBaseline
-      ? readRawConfigJson()
-      : undefined;
+    // One authoritative pre-write read feeds both the live-config reconciliation and
+    // custom-model deletion migration. A second read could observe different bytes.
+    const onDisk = readRawConfigJson();
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -2494,18 +2911,23 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
+    const projectedConfig = projectCustomModelCatalogMigration(
+      onDisk,
+      config,
+    );
     const persistedBinding = bindingBaseline && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline)
       : bindingBaseline;
     if (persistedBinding) {
-      const persistedConfig: OcxConfig = { ...config, port: persistedBinding.port };
+      const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
       if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
+      if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
     }
+    adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
     }
@@ -2608,18 +3030,22 @@ export type RuntimePortState = {
   pid: number;
   port: number;
   hostname?: string;
+  /** Per-process proof key; protected by the config directory and never served. */
+  attestationSecret?: string;
 };
 
 function isValidRuntimePortState(value: unknown): value is RuntimePortState {
   if (!value || typeof value !== "object") return false;
   const state = value as Record<string, unknown>;
   const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
+  const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
   return Number.isSafeInteger(state.pid)
     && Number(state.pid) > 0
     && Number.isInteger(state.port)
     && Number(state.port) > 0
     && Number(state.port) <= 65535
-    && hostnameOk;
+    && hostnameOk
+    && attestationOk;
 }
 
 export function writeRuntimePort(state: RuntimePortState): void {
@@ -2828,14 +3254,51 @@ export function verifyPidIdentity(candidatePid: number): number | null {
   return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
 }
 
+type ProcessCommandLineExec = (
+  executable: string,
+  args: string[],
+  options: {
+    encoding: BufferEncoding;
+    stdio: ["ignore", "pipe", "ignore"];
+    timeout: number;
+    windowsHide: boolean;
+  },
+) => string;
+
+const defaultProcessCommandLineExec: ProcessCommandLineExec = (executable, args, options) =>
+  execFileSync(executable, args, options);
+let processCommandLineExec = defaultProcessCommandLineExec;
+let processCommandLinePlatformForTests: NodeJS.Platform | null = null;
+
+/** Test-only seam for verifying the exact system executable selected by pid identity probes. */
+export function setProcessCommandLineExecForTests(next: ProcessCommandLineExec | null): void {
+  processCommandLineExec = next ?? defaultProcessCommandLineExec;
+}
+
+/** Test-only seam so cross-platform tests do not mutate process.platform. */
+export function setProcessCommandLinePlatformForTests(next: NodeJS.Platform | null): void {
+  processCommandLinePlatformForTests = next;
+}
+
 function readProcessCommandLine(pid: number): string | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  const platform = processCommandLinePlatformForTests ?? process.platform;
   try {
-    if (process.platform === "win32") {
+    if (platform === "linux") {
+      try {
+        const output = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+        const value = output.replace(/\0/g, " ").trim();
+        if (value) return value;
+      } catch {
+        /* procfs unavailable — use the fixed ps fallback below */
+      }
+    }
+    if (platform === "win32") {
       // Prefer WMIC over PowerShell: much faster cold start, and windowsHide avoids console flash.
       // Fall back to PowerShell when WMIC is absent (newer Windows images).
-      const wmic = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\wbem\\WMIC.exe`;
+      const wmic = join(resolveTrustedWindowsSystemDirectory(), "wbem", "WMIC.exe");
       try {
-        const output = execFileSync(wmic, [
+        const output = processCommandLineExec(wmic, [
           "process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/VALUE",
         ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
         const match = /^CommandLine=(.*)$/m.exec(output.replace(/\r/g, ""));
@@ -2844,7 +3307,7 @@ function readProcessCommandLine(pid: number): string | undefined {
       } catch {
         /* WMIC missing or failed — fall through */
       }
-      const output = execFileSync("powershell.exe", [
+      const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
         "-NoProfile",
         "-NoLogo",
         "-NonInteractive",
@@ -2855,13 +3318,21 @@ function readProcessCommandLine(pid: number): string | undefined {
       ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
       return output.trim() || undefined;
     }
-    const output = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 1000,
-      windowsHide: true,
-    });
-    return output.trim() || undefined;
+    for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
+      try {
+        const output = processCommandLineExec(ps, ["-p", String(pid), "-o", "command="], {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 1000,
+          windowsHide: true,
+        });
+        const value = output.trim();
+        if (value) return value;
+      } catch {
+        /* try the other fixed system path */
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }

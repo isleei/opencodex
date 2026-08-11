@@ -33,7 +33,7 @@ import {
   type ElevatedSchtasksCreateAndRunExecution,
   type ElevatedSchtasksCreateAndRunResult,
 } from "./lib/windows-elevation";
-import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, winswXmlPath, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
+import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, winswXmlPath, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION, type WinswStatus } from "./lib/winsw";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
@@ -2177,6 +2177,11 @@ type ServiceOps = {
   status: () => string; uninstall: () => void;
 };
 
+type ServiceInstallCleanupOps = {
+  status: () => string | null;
+  stop: () => void;
+};
+
 function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
   if (process.platform === "darwin")
     return { install: installLaunchd, start: startLaunchd, stop: stopLaunchd, status: statusLaunchd, uninstall: uninstallLaunchd };
@@ -2198,6 +2203,67 @@ function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
       process.exit(1);
     }
     return { install: installSystemd, start: startSystemd, stop: stopSystemd, status: statusSystemd, uninstall: uninstallSystemd };
+  }
+  return null;
+}
+
+/**
+ * Install-only manager operations. Unlike the ordinary status/stop helpers, these
+ * distinguish confirmed absence from a failed manager query and propagate every
+ * non-benign stop failure. Installing new assets is unsafe while either answer is
+ * unknown because an old manager may still respawn a listener on the target port.
+ */
+function platformServiceInstallCleanupOps(backend: ServiceBackend): ServiceInstallCleanupOps | null {
+  if (process.platform === "darwin") {
+    return {
+      status: () => {
+        const listing = sh("launchctl list");
+        return listing.split("\n").some(line => line.includes(LABEL)) ? listing : null;
+      },
+      stop: () => { sh(`launchctl unload "${plistPath()}"`); },
+    };
+  }
+  if (process.platform === "win32") {
+    if (backend === "native") {
+      return {
+        status: () => {
+          const status = statusWinswRaw();
+          if (status === "unknown") throw new Error("Native service status could not be verified.");
+          return status === "nonexistent" ? null : status;
+        },
+        stop: stopWinswService,
+      };
+    }
+    return {
+      status: () => {
+        const probe = probeWindowsSchedulerTask(TASK);
+        if (probe.status === "unknown") throw new Error(`Task Scheduler status could not be verified: ${probe.detail}`);
+        return probe.status === "present" ? "present" : null;
+      },
+      stop: () => {
+        try {
+          schtasks(["/end", "/tn", TASK]);
+        } catch (error) {
+          if (!isWindowsSchedulerEndBenign(error)) throw error;
+        }
+      },
+    };
+  }
+  if (process.platform === "linux") {
+    return {
+      status: () => {
+        // `list-unit-files <name>` exits non-zero when the unit has never been
+        // installed, which made a clean first install look like an unknown manager
+        // failure. `show LoadState` gives us the tri-state we actually need: a
+        // healthy user manager returns `not-found` for a missing unit, while an
+        // unreachable/permission-denied manager still makes `sh()` throw and the
+        // caller therefore fails closed.
+        const loadState = sh(`systemctl --user show ${TASK} --property=LoadState --value`).trim().toLowerCase();
+        if (!loadState) throw new Error("systemd service status could not be verified.");
+        return loadState === "not-found" ? null : loadState;
+      },
+      stop: () => { sh(`systemctl --user stop ${TASK}`); },
+    };
   }
   return null;
 }
@@ -2297,6 +2363,60 @@ async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupR
   }
 }
 
+export interface ServiceInstallPreparationDeps {
+  diagnose?: () => ServiceDiagnostic;
+  managerOps?: (backend: ServiceBackend) => ServiceInstallCleanupOps | null;
+  stopTrackedProxy?: () => Promise<unknown>;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Stop every manager that could own the install port, then stop the tracked
+ * standalone listener. Any unknown status or cleanup failure rejects, so callers
+ * cannot write assets or report success over a surviving old listener.
+ */
+export async function prepareServiceInstall(
+  requestedBackend: ServiceBackend,
+  deps: ServiceInstallPreparationDeps = {},
+): Promise<void> {
+  const diagnostic = (deps.diagnose ?? diagnoseService)();
+  const platform = deps.platform ?? process.platform;
+  const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
+  const backends: ServiceBackend[] = [];
+  const addBackend = (backend: ServiceBackend) => {
+    if (!backends.includes(backend)) backends.push(backend);
+  };
+
+  if (platform === "win32") {
+    // The recorded backend owns the old installation and must be stopped first.
+    // A conflicting diagnostic means both managers exist, so stop both even when
+    // the requested backend happens to match the recorded one.
+    if (diagnostic.backend === "scheduler" || diagnostic.backend === "native") {
+      addBackend(diagnostic.backend);
+      if (diagnostic.conflict) addBackend(diagnostic.backend === "scheduler" ? "native" : "scheduler");
+    }
+    addBackend(requestedBackend);
+  } else {
+    addBackend(requestedBackend);
+  }
+
+  for (const backend of backends) {
+    const manager = resolveOps(backend);
+    if (!manager) throw new Error(`Background service manager is unavailable for ${backend}.`);
+    if (manager.status() !== null) manager.stop();
+  }
+  await (deps.stopTrackedProxy ?? stopTrackedProxyIfRunning)();
+}
+
+export async function installServiceSafely(
+  requestedBackend: ServiceBackend,
+  install: () => void | Promise<void>,
+  deps: ServiceInstallPreparationDeps = {},
+): Promise<void> {
+  await prepareServiceInstall(requestedBackend, deps);
+  await install();
+}
+
 /**
  * If a service is installed, stop it so the process manager doesn't respawn after `ocx stop`.
  * Returns true if a service was found and stopped.
@@ -2332,33 +2452,53 @@ function removeServiceInstallState(): void {
   }
 }
 
+type UninstallServiceHooksForTests = {
+  platform: typeof process.platform;
+  assertEnvironment: () => void;
+  probeWindowsTask: () => WindowsSchedulerTaskProbe;
+  uninstallWindowsTask: () => void;
+  nativeStatus: () => WinswStatus;
+  uninstallNative: () => void;
+  removeInstallState: () => void;
+};
+
+let uninstallServiceHooksForTests: UninstallServiceHooksForTests | null = null;
+
+/** Test-only hooks for full-uninstall service removal. */
+export function setUninstallServiceHooksForTests(hooks: UninstallServiceHooksForTests | null): void {
+  uninstallServiceHooksForTests = hooks;
+}
+
 /**
  * Best-effort service removal for full uninstall. Unlike `ocx service uninstall`, this is quiet
- * when no service exists and never exits the process just because the platform has no service
- * manager.
+ * when no service exists or the platform has no service manager. An installed native Windows
+ * service or scheduler task that cannot be removed throws so the caller cannot erase state and
+ * report success.
  */
 export function uninstallServiceIfInstalled(): boolean {
-  assertServiceEnvironmentMatchesInstall();
-  if (process.platform === "darwin") {
+  const hooks = uninstallServiceHooksForTests;
+  (hooks?.assertEnvironment ?? assertServiceEnvironmentMatchesInstall)();
+  const platform = hooks?.platform ?? process.platform;
+  if (platform === "darwin") {
     if (existsSync(plistPath())) {
       try { uninstallLaunchd(); removeServiceInstallState(); return true; } catch { return false; }
     }
-  } else if (process.platform === "win32") {
+  } else if (platform === "win32") {
     let removed = false;
-    try {
-      const q = schtasks(["/query", "/tn", TASK]);
-      if (q.includes(TASK)) { uninstallWindows(); removed = true; }
-    } catch { /* task not found */ }
-    if (statusWinswRaw() !== "nonexistent") {
-      try {
-        uninstallWinswService();
-        removed = true;
-      } catch (err) {
-        console.warn(`⚠️  Failed to remove native service: ${err instanceof Error ? err.message : String(err)}. Check 'sc.exe query ${WINSW_SERVICE_ID}'.`);
-      }
+    const scheduler = (hooks?.probeWindowsTask ?? probeWindowsSchedulerTask)();
+    if (scheduler.status === "unknown") {
+      throw new Error(`Could not determine Task Scheduler state: ${scheduler.detail}`);
     }
-    if (removed) { removeServiceInstallState(); return true; }
-  } else if (process.platform === "linux" && existsSync(unitPath())) {
+    if (scheduler.status === "present") {
+      (hooks?.uninstallWindowsTask ?? uninstallWindows)();
+      removed = true;
+    }
+    if ((hooks?.nativeStatus ?? statusWinswRaw)() !== "nonexistent") {
+      (hooks?.uninstallNative ?? uninstallWinswService)();
+      removed = true;
+    }
+    if (removed) { (hooks?.removeInstallState ?? removeServiceInstallState)(); return true; }
+  } else if (platform === "linux" && existsSync(unitPath())) {
     try { uninstallSystemd(); removeServiceInstallState(); return true; } catch {
       try { unlinkSync(unitPath()); removeServiceInstallState(); return true; } catch { return false; }
     }
@@ -2645,7 +2785,19 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "install":
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
-      await ops.install();
+      // A manually started proxy can still own the configured port while the service
+      // registration is absent or unloaded. Stop both the registered manager and any
+      // tracked standalone listener before loading the freshly written service assets.
+      // Otherwise launchd/Task Scheduler can register successfully while its child
+      // restart-loops on EADDRINUSE, and the old standalone process makes the install
+      // verification report a false success.
+      try {
+        await installServiceSafely(backend, ops.install);
+      } catch (error) {
+        console.error(`❌ Service install cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+        break;
+      }
       // The wrapper was written moments ago in this process, so the configured port
       // and the baked one cannot have diverged yet — unlike `start`, which reads the
       // installed artifact instead.

@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
 	BOUNDED_BODY_MAX_BYTES,
 	boundedBodyBufferGrowthsForTests,
+	readBoundedResponseBytes,
 	readBoundedResponseBody,
 } from "../src/lib/bounded-body";
+import { UPSTREAM_JSON_BODY_READ_OPTIONS } from "../src/server/responses/core";
 
 const encoder = new TextEncoder();
 
@@ -18,6 +20,11 @@ function responseFromChunks(...chunks: Uint8Array[]): Response {
 }
 
 describe("readBoundedResponseBody", () => {
+	test("the bounded JSON caller allows a full total deadline for its first byte", () => {
+		expect(UPSTREAM_JSON_BODY_READ_OPTIONS.firstByteTimeoutMs)
+			.toBe(UPSTREAM_JSON_BODY_READ_OPTIONS.totalTimeoutMs);
+	});
+
 	test("reads multiple chunks and flushes split UTF-8", async () => {
 		const bytes = encoder.encode("alpha 한글 🌍");
 		const response = responseFromChunks(bytes.subarray(0, 8), bytes.subarray(8, 11), bytes.subarray(11));
@@ -50,6 +57,83 @@ describe("readBoundedResponseBody", () => {
 		expect(result.inactivityTimedOut).toBe(true);
 		expect(result.totalTimedOut).toBe(false);
 		expect(cancelled).toBe(true);
+	});
+
+	test("allows the first byte to arrive after the inter-chunk inactivity deadline", async () => {
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				setTimeout(() => {
+					controller.enqueue(encoder.encode("first byte"));
+					controller.close();
+				}, 30);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+			firstByteTimeoutMs: 60,
+		});
+
+		expect(result.text).toBe("first byte");
+		expect(result.truncated).toBe(false);
+		expect(result.inactivityTimedOut).toBe(false);
+	});
+
+	test("times out when the first byte misses its dedicated deadline", async () => {
+		const response = new Response(new ReadableStream<Uint8Array>({}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 60,
+			firstByteTimeoutMs: 15,
+		});
+
+		expect(result.inactivityTimedOut).toBe(true);
+		expect(result.totalTimedOut).toBe(false);
+	});
+
+	test("keeps the inter-chunk inactivity deadline after the first byte", async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode("first"));
+				timer = setTimeout(() => controller.enqueue(encoder.encode("late")), 30);
+			},
+			cancel() {
+				if (timer) clearTimeout(timer);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+			firstByteTimeoutMs: 60,
+		});
+
+		expect(result.text).toBe("first");
+		expect(result.truncated).toBe(true);
+		expect(result.inactivityTimedOut).toBe(true);
+	});
+
+	test("uses the inactivity deadline for the first byte by default", async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				timer = setTimeout(() => controller.enqueue(encoder.encode("late")), 30);
+			},
+			cancel() {
+				if (timer) clearTimeout(timer);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+		});
+
+		expect(result.inactivityTimedOut).toBe(true);
+		expect(result.totalTimedOut).toBe(false);
 	});
 
 	test("a partial body followed by silence times out and flushes UTF-8", async () => {
@@ -280,5 +364,93 @@ describe("readBoundedResponseBody", () => {
 		expect(result.text).toBe("original");
 		expect(response.bodyUsed).toBe(true);
 		expect(cloneCalls).toBe(0);
+	});
+
+	test("reads arbitrary response bytes exactly through the raw primitive", async () => {
+		const expected = new Uint8Array([0x00, 0xff, 0x80, 0xc3, 0x28]);
+		const response = responseFromChunks(expected.subarray(0, 2), expected.subarray(2));
+
+		const result = await readBoundedResponseBytes(response, { maxBytes: expected.byteLength });
+
+		expect(result.oversized).toBe(false);
+		expect(Array.from(result.bytes)).toEqual(Array.from(expected));
+	});
+
+	test("raw byte reads discard the prefix and cancel without draining the stream", async () => {
+		let cancelled = false;
+		let tailPulled = false;
+		const chunks = [new Uint8Array(3), new Uint8Array(3), new Uint8Array([0x7f]), new Uint8Array([0x7e])];
+		const response = new Response(new ReadableStream<Uint8Array>({
+			pull(controller) {
+				const chunk = chunks.shift();
+				if (!chunk) return controller.close();
+				if (chunk.byteLength === 1 && chunk[0] === 0x7e) tailPulled = true;
+				controller.enqueue(chunk);
+			},
+			cancel() { cancelled = true; },
+		}));
+
+		const result = await readBoundedResponseBytes(response, { maxBytes: 5 });
+
+		expect(result.oversized).toBe(true);
+		expect(result.bytes.byteLength).toBe(0);
+		expect(cancelled).toBe(true);
+		// WHATWG streams may prefetch one queued chunk, but cancellation must stop further draining.
+		expect(tailPulled).toBe(false);
+	});
+
+	test("raw byte reads preserve the parent abort reason and cancel the stream", async () => {
+		const parent = new AbortController();
+		const reason = { code: "client-stopped" };
+		let cancelled = false;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			cancel() { cancelled = true; },
+		}));
+		const reading = readBoundedResponseBytes(response, { maxBytes: 5, signal: parent.signal });
+		parent.abort(reason);
+
+		let caught: unknown;
+		try { await reading; } catch (error) { caught = error; }
+		expect(caught).toBe(reason);
+		expect(cancelled).toBe(true);
+	});
+
+	test("raw byte cancellation rejection is observed", async () => {
+		const unhandled: unknown[] = [];
+		const listener = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", listener);
+		try {
+			// Bun's test runner fails a test on a real unhandled rejection even when a
+			// process listener is installed. Prove the pinned runtime's event path in an
+			// isolated process, then keep this process clean for the negative assertion.
+			const control = Bun.spawnSync({
+				cmd: [
+					process.execPath,
+					"-e",
+					'process.on("unhandledRejection", () => console.log("observed"));'
+						+ 'void Promise.reject(new Error("control"));setTimeout(() => {}, 10);',
+				],
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(control.exitCode).toBe(0);
+			expect(new TextDecoder().decode(control.stdout)).toContain("observed");
+
+			let cancelCalls = 0;
+			const response = new Response(new ReadableStream<Uint8Array>({
+				start(controller) { controller.enqueue(new Uint8Array(6)); },
+				cancel() {
+					cancelCalls++;
+					return Promise.reject(new Error("cancel failed"));
+				},
+			}));
+			const result = await readBoundedResponseBytes(response, { maxBytes: 5 });
+			expect(result.oversized).toBe(true);
+			await new Promise(resolve => setTimeout(resolve, 10));
+			expect(cancelCalls).toBe(1);
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", listener);
+		}
 	});
 });

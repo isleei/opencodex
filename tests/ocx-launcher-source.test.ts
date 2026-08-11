@@ -36,6 +36,17 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
   });
 
+  test("the long-running Bun child stays hidden under a headless Windows launcher (#1236)", () => {
+    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath");
+    expect(spawnStart).toBeGreaterThanOrEqual(0);
+    const spawnCall = source.slice(spawnStart, source.indexOf("});", spawnStart));
+
+    // Scope this to the final Node-to-Bun launch. Other helper spawns already hide
+    // their windows, but they do not cover the child that owns the proxy lifetime.
+    expect(spawnCall).toContain('stdio: "inherit"');
+    expect(spawnCall).toContain("windowsHide: true");
+  });
+
   test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
     expect(source).toContain("const latestInvocation = npmInvocation(");
     expect(source).toContain("const installInvocation = npmInvocation(");
@@ -55,10 +66,13 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
   // auto-load `.env` while the Bun child does. Losing this half silently returns the
   // proxy to billing a subscriber's API key from an ambient file, and the runtime half in
   // src/cli/claude.ts would keep passing its own unit tests while doing nothing.
-  test("the Bun child receives the pre-Bun Anthropic provenance marker", () => {
-    expect(source).toContain("const preBunAnthropicSlots = [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\"]");
-    expect(source).toContain("OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots.join(\",\")");
-    // The marker must be computed from the launcher's OWN env, before Bun's dotenv load.
+  test("the Bun child receives proof-bound pre-Bun Anthropic provenance", () => {
+    expect(source).toContain("const preBunAnthropicSlots = [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\", \"ANTHROPIC_BASE_URL\"]");
+    expect(source).toContain("const launchProof = randomBytes(32).toString(\"base64url\")");
+    expect(source).toContain("[NODE_LAUNCH_CONTEXT_ENV]: launchContext");
+    expect(source).toContain("`${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`");
+    expect(source).not.toContain("OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots");
+    // The snapshot must be computed from the launcher's OWN env, before Bun's dotenv load.
     expect(source).toContain("typeof process.env[name] === \"string\" && process.env[name] !== \"\"");
   });
 

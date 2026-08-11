@@ -6,7 +6,7 @@
  * of the record schema, the /api/sync contract, and the convergence entry
  * point; the contract is centralized here so a consumer can only import.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/005_contract.md
+ * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md
  * Audit trail: 006, 007, 008, 009, 010 audit syntheses in the same unit.
  *
  * TYPES ONLY. WP8b deliberately rewires nothing: WP9 supplies the first
@@ -422,7 +422,7 @@ export interface CatalogProviderDiscoveryPolicySnapshot {
     readonly path: CatalogDiscoveryPolicyField<string | undefined>;
     readonly query: CatalogDiscoveryPolicyField<Readonly<Record<string, string>> | undefined>;
   }>;
-  readonly finalMethod: "GET";
+  readonly finalMethod: "GET" | "POST";
   readonly finalUrl: string;
   readonly filter: CatalogDiscoveryPolicyField<ProviderModelDiscoveryFilter | undefined>;
   readonly maxResponseBytes: number;

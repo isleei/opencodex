@@ -61,6 +61,11 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
+Translated response request-log tracking and the heartbeat relay also reuse
+`createSseInspector`. This keeps every client-facing SSE observation path on
+the same byte-bounded, discard-and-resynchronize frame policy and ensures the
+request-log, first-output, and terminal observers share one payload parse.
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an
@@ -211,8 +216,17 @@ upstream Responses endpoint for bounded JSON on ANY client transport — WebSock
 HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
 (`src/server/responses-json-events.ts`): WS turns send the frames as WebSocket messages, while
 HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
-output_item.done → terminal → `[DONE]`). DeepSeek V4 Flash uses this path because its Codex
-streaming response can deliver output without closing on a terminal event.
+output_item.done → terminal → `[DONE]`). No production registry entry currently opts in:
+DeepSeek V4 Flash used this path while its public-beta Responses stream was suspected of not
+closing on the terminal event, but the official guide documents a
+`response.completed`/`response.incomplete`/`response.failed` terminal with no `data: [DONE]`
+sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal. The relay's
+terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
+`[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
+rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
+`tests/deepseek-inbound-wire.test.ts`.
+Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
+encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
@@ -369,6 +383,26 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when historical markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
+
+## Google tool-call thought-signature replay
+
+Gemini may attach an opaque `thoughtSignature` to a `functionCall` and requires that exact value on
+the matching model turn when its tool result is submitted. Antigravity and Vertex share the existing
+bounded TTL/LRU replay store, keyed by compiled function-call name plus canonical arguments. Vertex
+prefixes its cache model key with the transport, project, and location identity, so a signature
+minted by Vertex cannot be sent to Antigravity even when both routes expose the same public model id.
+Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls back to the existing
+first-user-message derivation for clients that omit it; only the fixed hash is retained.
+Both streaming and non-streaming responses feed the store; request compilation happens before replay
+so matching uses the provider-visible tool name.
+
+[Decision Log]
+- 목적과 의도: Preserve Vertex Gemini tool-call continuation without exposing opaque signatures to Codex or another Google backend.
+- 기존 구현 및 제약 조건: Responses history does not carry a safe Gemini signature field; Antigravity already used a bounded in-process replay cache, while Vertex bypassed it and received HTTP 400 after the first tool call.
+- 검토한 주요 대안: Serialize the signature into Responses item ids or reasoning content; create an unbounded Vertex map; reuse the bounded cache with or without a transport namespace.
+- 선택한 방식: Reuse the bounded cache for Vertex, observe both response shapes, apply after wire-name compilation, and scope Vertex by transport/project/location plus the opaque client session key when available.
+- 다른 대안 대신 이 방식을 선택한 이유: Responses ids are not Gemini signatures and previously caused Base64/TYPE_BYTES failures; a second cache duplicates limits; an unscoped cache could send provider-private state across destinations.
+- 장점, 단점 및 영향: Tool loops continue with exact opaque state and bounded memory while cross-transport reuse fails closed. Replay remains process-local, matching the existing Antigravity contract.
 
 ## OpenRouter provider routing
 

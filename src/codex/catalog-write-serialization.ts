@@ -22,7 +22,7 @@
  * advances the native pair. Order is `N -> K -> C`; there is no `C -> K` and no
  * `K -> N` (`005_contract.md:660-762`).
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/005_contract.md §3.
+ * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §3.
  */
 import { chmodSync, lstatSync, realpathSync } from "node:fs";
 
@@ -32,6 +32,7 @@ import {
   CodexUserIdentityRefusal,
   resolveCodexCatalogSerializationDatabasePath,
   resolveEffectiveUserIdentity,
+  samePathIdentity,
 } from "./user-identity";
 
 /**
@@ -180,7 +181,7 @@ export function withCatalogWriteSerialization<T>(
     }
     const opened = lstatSync(databasePath);
     if (opened.isSymbolicLink() || !opened.isFile()
-      || realpathSync.native(databasePath) !== databasePath) {
+      || !samePathIdentity(realpathSync.native(databasePath), databasePath)) {
       return { kind: "unavailable", reason: "unsafe-path" };
     }
 

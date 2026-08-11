@@ -32,10 +32,11 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
-import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
+import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
+import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets, enrichProviderFromRegistry } from "../../providers/derive";
-import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
+import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
   extractProviderModelItems,
@@ -177,6 +178,45 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  // The Models page edits the catalog hints in place; keep them on the existing
+  // provider mutation path so validation, cache invalidation, and convergence stay unified (#1073).
+  if (Object.hasOwn(rawBody, "contextWindow")) {
+    const value = rawBody.contextWindow;
+    if (value === null) {
+      delete next.contextWindow;
+    // `Number.isInteger(1e100)` is true, so an integer check alone admits a value that
+    // serializes into the catalog as an enormous number and can make Codex reject the whole
+    // file. Safe-integer is the real bound for something that ends up in a JSON int field.
+    } else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+      next.contextWindow = value;
+    } else {
+      return { error: "contextWindow must be a positive safe integer or null" };
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelContextWindows")) {
+    const value = rawBody.modelContextWindows;
+    if (value === null) {
+      delete next.modelContextWindows;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelContextWindows must be a plain object or null" };
+      const windows: Record<string, number> = { ...(next.modelContextWindows ?? {}) };
+      for (const [model, window] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelContextWindows keys must be nonblank model ids" };
+        if (window === null) {
+          delete windows[model];
+          continue;
+        }
+        if (typeof window !== "number" || !Number.isSafeInteger(window) || window <= 0) {
+          return { error: "modelContextWindows values must be positive safe integers or null" };
+        }
+        windows[model] = window;
+      }
+      if (Object.keys(windows).length > 0) next.modelContextWindows = windows;
+      else delete next.modelContextWindows;
+    }
+    touched = true;
+  }
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -261,6 +301,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       models: p.models ?? [],
+      contextWindow: p.contextWindow,
+      modelContextWindows: p.modelContextWindows,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
@@ -310,6 +352,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // let the (possibly new) apiKey join the pool as the active entry.
     const existingPool = config.providers[name]?.apiKeyPool;
     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+    // The same rule applies to user-configured price overlays: the dashboard's
+    // add/edit form does not send modelCosts, so an overwrite must not silently
+    // erase hand-edited per-model prices from Logs/Usage estimates.
+    const existingCosts = config.providers[name]?.modelCosts;
+    if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
@@ -602,19 +649,33 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
-    const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
-    const apiKey = await resolveModelsAuthToken(name, prov);
+    const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
+    const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
+    const snapshot = antigravity
+      ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
+      : undefined;
+    const apiKey = snapshot?.accessToken ?? await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
-    const { url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    const project = prov.project ?? snapshot?.projectId;
+    if (antigravity && !project) {
+      return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
+    }
+    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
-      const res = await providerOutboundGet(name, prov, modelsUrl, {
-        headers,
-        signal: AbortSignal.timeout(8000),
-      });
+      const res = method === "POST"
+        ? await providerOutboundPost(name, prov, modelsUrl, {
+          headers,
+          body: JSON.stringify({ project }),
+          signal: AbortSignal.timeout(8000),
+        })
+        : await providerOutboundGet(name, prov, modelsUrl, {
+          headers,
+          signal: AbortSignal.timeout(8000),
+        });
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
       if (redirectError) {
@@ -630,7 +691,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         } catch {
           // Best-effort release for non-conforming response streams.
         }
-        return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
+        return jsonResponse({ ok: false, latencyMs, error: `upstream model discovery returned ${res.status}` });
       }
       const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
       if (!bounded.ok) {
@@ -638,9 +699,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           ok: false,
           latencyMs,
           error: bounded.reason === "response_too_large"
-            ? `upstream /models exceeded the ${discovery.maxResponseBytes}-byte response limit`
-            : "upstream /models returned invalid JSON",
+              ? `upstream model discovery exceeded the ${discovery.maxResponseBytes}-byte response limit`
+              : "upstream model discovery returned invalid JSON",
         });
+      }
+      const ccaModels = antigravity ? parseAntigravityAvailableModels(bounded.value, discovery.maxModels) : undefined;
+      if (antigravity && !ccaModels) {
+        return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
       // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
@@ -648,10 +713,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
         ? bounded.value as Record<string, unknown>
         : undefined;
-      const extracted = Array.isArray(bounded.value) || Array.isArray(record?.data)
+      const extracted = ccaModels
+        ? undefined
+        : Array.isArray(bounded.value) || Array.isArray(record?.data)
         ? extractProviderModelItems(bounded.value, discovery)
         : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
-      if (!extracted.ok) {
+      if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,
           latencyMs,
@@ -660,7 +727,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : "upstream /models returned an unexpected shape",
         });
       }
-      const models = "items" in extracted ? extracted.items.length : extracted.rows.length;
+      const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
       return jsonResponse({
         ok: true,
         latencyMs,
@@ -711,13 +778,20 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
     delete config.providers[name];
+    const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
+    const droppedCustomModels = dropProviderCustomModels(config, name);
     setProviderContextCap(config, name, false);
     save(config);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
     const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}), catalogRefresh });
+    return jsonResponse({
+      success: true,
+      ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}),
+      ...(droppedCustomModels > 0 ? { droppedCustomModels } : {}),
+      catalogRefresh,
+    });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
@@ -725,8 +799,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
-    let body: { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    let rawBody: unknown;
+    try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    // Reject non-object payloads (e.g. `{"provider": true}` or a bare array) before any
+    // property access, with the route's consistent 400 response.
+    if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider-context-caps body must be a plain object" }, 400);
+    const body = rawBody as { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const { clearModelCache } = await import("../../codex/model-cache");
     const respond = (catalogRefresh: Awaited<ReturnType<typeof convergeCodexCatalog>>) => jsonResponse({
@@ -737,21 +815,78 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       catalogRefresh,
     });
 
-    // Branch 1: set the global cap value and re-point every enabled provider to it.
-    if (body.value !== undefined) {
-      if (typeof body.value !== "number" || !Number.isFinite(body.value) || body.value <= 0) {
+    // Reject malformed and mixed payloads before branch selection: `provider` and `enabled`
+    // must appear together with their expected types, and provider updates cannot be
+    // combined with `setAll` (which would otherwise be silently ignored).
+    const hasProviderFields = Object.hasOwn(body, "provider") || Object.hasOwn(body, "enabled");
+    if (hasProviderFields) {
+      if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
+        return jsonResponse({ error: "provider and enabled are required together" }, 400);
+      }
+      if (Object.hasOwn(body, "setAll")) {
+        return jsonResponse({ error: "setAll cannot be combined with provider updates" }, 400);
+      }
+    }
+
+    // Branch 1: per-provider toggle (checked first: a per-provider request may carry an
+    // explicit `value`, which must never fall through to the global-value branch). Enable
+    // writes the current global default unless an explicit per-provider value is supplied;
+    // that value is never copied to other providers.
+    if (typeof body.provider === "string" && typeof body.enabled === "boolean") {
+      const provider = body.provider.trim();
+      if (!isValidProviderName(provider)) {
+        return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
+      }
+      if (!hasOwnProvider(config.providers, provider)) {
+        return jsonResponse({ error: "unknown provider" }, 404);
+      }
+      // Validate a supplied per-provider value before mutating anything: it must be a
+      // finite number, and after flooring it must still be >= 1 — a value like 0.5 would
+      // otherwise floor to 0 and silently fall back to the global default.
+      if (body.value !== undefined && (typeof body.value !== "number" || !Number.isFinite(body.value))) {
         return jsonResponse({ error: "value must be a positive number" }, 400);
       }
-      const affected = Object.keys(providerContextCaps(config));
-      setGlobalContextCapValue(config, body.value);
+      const perProviderValue = typeof body.value === "number" ? Math.floor(body.value) : undefined;
+      if (perProviderValue !== undefined && perProviderValue < 1) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      setProviderContextCap(config, provider, body.enabled, perProviderValue);
       save(config);
       reconcileLiveStateStores();
-      for (const provider of affected) clearModelCache(provider);
+      clearModelCache(provider);
       const catalogRefresh = await convergeCodexCatalog();
       return respond(catalogRefresh);
     }
 
-    // Branch 2: enable/clear the cap for every provider at once.
+    // Branch 2: set the global cap value. When `setAll` accompanies it (dashboard "apply to
+    // every routed provider" toggle), re-point every enabled provider; otherwise keep each
+    // provider's own cap value and only change the default for future toggles.
+    if (body.value !== undefined) {
+      // Same normalization as the per-provider branch: floor before validating so a value
+      // that floors to zero is rejected rather than silently stored.
+      if (typeof body.value !== "number" || !Number.isFinite(body.value)) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      const normalizedValue = Math.floor(body.value);
+      if (normalizedValue < 1) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      if (body.setAll !== undefined && typeof body.setAll !== "boolean") {
+        return jsonResponse({ error: "setAll must be a boolean" }, 400);
+      }
+      const affected = Object.keys(providerContextCaps(config));
+      const applyToAll = body.setAll === true;
+      setGlobalContextCapValue(config, normalizedValue, applyToAll);
+      save(config);
+      reconcileLiveStateStores();
+      if (applyToAll) {
+        for (const provider of affected) clearModelCache(provider);
+      }
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
+    }
+
+    // Branch 3: enable/clear the cap for every provider at once.
     if (body.setAll !== undefined) {
       if (typeof body.setAll !== "boolean") {
         return jsonResponse({ error: "setAll must be a boolean" }, 400);
@@ -766,23 +901,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return respond(catalogRefresh);
     }
 
-    // Branch 3: existing per-provider toggle (enable writes the current global value).
-    if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
-      return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
-    }
-    const provider = body.provider.trim();
-    if (!isValidProviderName(provider)) {
-      return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
-    }
-    if (!hasOwnProvider(config.providers, provider)) {
-      return jsonResponse({ error: "unknown provider" }, 404);
-    }
-    setProviderContextCap(config, provider, body.enabled);
-    save(config);
-    reconcileLiveStateStores();
-    clearModelCache(provider);
-    const catalogRefresh = await convergeCodexCatalog();
-    return respond(catalogRefresh);
+    // Unrecognized payload: reject rather than silently succeeding.
+    return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
   }
 
   // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a

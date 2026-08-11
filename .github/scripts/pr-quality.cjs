@@ -27,18 +27,19 @@ const REVIEW_READINESS_END = "<!-- pr-quality-readiness-checklist:end -->";
 const REVIEW_READINESS_ITEMS = [
   "All CI tests are green on my local testing.",
   "I pushed my PR to the latest dev commit.",
-  "I fixed all correct Codex and CodeRabbit findings.",
+  "I resolved all correct Codex and CodeRabbit findings.",
   "My PR is ready for review.",
 ];
 
 /**
  * Which checklist box each bot-verifiable claim maps to. The order must stay
- * in sync with REVIEW_READINESS_ITEMS: index 0 is the CI claim and index 1 is
- * the latest-dev claim.
+ * in sync with REVIEW_READINESS_ITEMS: index 0 is the CI claim, index 1 is
+ * the latest-dev claim, and index 2 is the Codex/CodeRabbit findings claim.
  */
 const REVIEW_READINESS_CLAIM_INDEX = {
   ci_green: 0,
-  latest_dev: 1
+  latest_dev: 1,
+  review_findings: 2
 };
 
 /**
@@ -168,14 +169,73 @@ function assessPrDescription(body) {
 }
 
 /**
+ * True when any changed path is the gui directory or inside it (slash-guarded).
+ * Mirrors `guiPathsChanged` in `scripts/doctor-gui-if-changed.ts`.
+ */
+function guiPathsChanged(files) {
+  return files.some(
+    (file) => file === "gui" || file.startsWith("gui/")
+  );
+}
+
+/**
+ * True when the changed-file list from `pulls.listFiles` cannot be trusted to
+ * be complete for screenshot gating. Missing or non-integer counts, a head
+ * mismatch between the count snapshot and the paginated list, or a count above
+ * the returned list length all fail closed.
+ */
+function isChangedFileListTruncated(changedFilesCount, listedLength, headMatches = true) {
+  if (!headMatches) return true;
+  if (!Number.isInteger(changedFilesCount) || changedFilesCount < 0) return true;
+  return changedFilesCount > listedLength;
+}
+
+/**
  * True when the PR title or description names the GUI surface as a whole word.
  * The description is template-stripped first so the template's own screenshot
- * instruction cannot arm the gate on its own.
+ * instruction cannot arm the gate on its own. Negated phrases such as "no gui
+ * changes" are not treated as cues (see `segmentHasAffirmativeGuiCue`).
  */
+function segmentHasAffirmativeGuiCue(text) {
+  if (typeof text !== "string" || !text.trim()) return false;
+  const segments = text.split(/(?<=[.!?\n])/);
+  return segments.some((segment) => {
+    if (!GUI_CUE_RE.test(segment)) return false;
+    const withoutNegated = segment.replace(GUI_OVERRIDE_RE, "");
+    return GUI_CUE_RE.test(withoutNegated);
+  });
+}
+
 function hasGuiCue(title, body) {
-  return (
-    (typeof title === "string" && GUI_CUE_RE.test(title)) ||
-    (typeof body === "string" && GUI_CUE_RE.test(body))
+  return segmentHasAffirmativeGuiCue(title) || segmentHasAffirmativeGuiCue(body);
+}
+
+/**
+ * Phrases in a maintainer comment that waive the GUI-screenshot gate. A
+ * comment saying the change does not touch the GUI means the `gui` cue in the
+ * title/description is a false positive and a screenshot is not required. The
+ * negation word must appear within a short window before `gui`, so a comment
+ * like "this touches gui but only the config" (no negation) keeps the gate.
+ * The window cannot cross a sentence or line boundary: "This does not change
+ * the API. Please add a gui screenshot." must not waive the gate.
+ */
+const GUI_OVERRIDE_RE =
+  /\b(?:no|not|doesn'?t|does not|never|without)\b[^.!?\n]{0,40}?\bgui\b/i;
+
+/**
+ * True when a maintainer (OWNER / COLLABORATOR / MEMBER) issue comment waives
+ * the GUI-screenshot requirement. Only the comment author's association
+ * counts: the PR author (`CONTRIBUTOR`/`NONE`) cannot override their own
+ * screenshot requirement.
+ */
+function hasGuiOverride({ comments = [] }) {
+  return comments.some(
+    comment =>
+      (comment?.author_association === "OWNER" ||
+        comment?.author_association === "COLLABORATOR" ||
+        comment?.author_association === "MEMBER") &&
+      typeof comment?.body === "string" &&
+      GUI_OVERRIDE_RE.test(comment.body)
   );
 }
 
@@ -416,6 +476,15 @@ function collectPrQualityFailures({
   ancestryLookupFailed = false,
   /** True when baseRef is another open PR's head (stacked child). */
   stackedBase = false,
+  /** Issue comments; a maintainer comment waives the GUI-screenshot gate. */
+  guiOverrideComments = [],
+  /** Changed file paths from `pulls.listFiles` (repo-relative). */
+  changedFilePaths = [],
+  /**
+   * True when `pulls.listFiles` returned fewer paths than `pulls.get`
+   * `changed_files` (GitHub caps the file list at 3,000 entries).
+   */
+  filesTruncated = false
 }) {
   const failures = [];
   const wrongBase = !allowedBases.includes(baseRef) && !stackedBase;
@@ -443,14 +512,14 @@ function collectPrQualityFailures({
     failures.push({ code: "bad_description", reason: desc.reason });
   }
 
-  // GUI-cued PRs must prove the UI change visually. The template's own
-  // screenshot instruction is boilerplate, so it cannot trigger this gate.
+  // PRs that change gui/ must prove the UI change visually. Text cues in the
+  // title or description are not enough — "no gui changes" in the body must
+  // not arm the gate when the diff is backend-only. A maintainer comment saying
+  // the change does not touch the GUI still waives a gui/ diff false positive.
   if (
-    hasGuiCue(
-      title,
-      typeof body === "string" ? stripPrTemplateBoilerplate(body) : "",
-    ) &&
-    !hasScreenshotEvidence(body)
+    (guiPathsChanged(changedFilePaths) || filesTruncated) &&
+    !hasScreenshotEvidence(body) &&
+    !hasGuiOverride({ comments: guiOverrideComments })
   ) {
     failures.push({ code: "missing_ui_screenshot" });
   }
@@ -466,7 +535,10 @@ module.exports = {
   isWrongAncestry,
   authorHasPushPermission,
   assessPrDescription,
+  guiPathsChanged,
+  isChangedFileListTruncated,
   hasGuiCue,
+  hasGuiOverride,
   hasScreenshotEvidence,
   buildReviewReadinessSection,
   extractReviewReadiness,

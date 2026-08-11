@@ -24,7 +24,7 @@ runs helper features around provider requests.
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model at low effort. Default source prefixes are `gpt-5.4-mini` and `gpt-5.6-luna`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model at low effort. The default source prefix is `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
@@ -63,6 +63,44 @@ environment token after startup; candidates are compared in constant time.
 :::caution[LAN exposure]
 A `0.0.0.0` bind exposes the proxy and configured provider access to the LAN. Use it only on trusted
 networks with a strong token.
+:::
+
+### Local clients that cannot receive the token
+
+A remote bind requires a credential from every caller, including local ones. That breaks a specific
+case: a `codex app-server` launched by a host process that resolves the Codex entrypoint directly
+(`require.resolve('@openai/codex/bin/codex.js')`) never passes through the generated `codex` shim,
+so it never inherits `OPENCODEX_API_AUTH_TOKEN` and every model call fails with `401` before a
+stream opens.
+
+`unauthenticatedLoopbackListener` opens a second listener bound to `127.0.0.1` that admits without a
+credential. The main listener is untouched — remote callers still need the token.
+
+```json
+{
+  "hostname": "0.0.0.0",
+  "port": 10100,
+  "unauthenticatedLoopbackListener": { "enabled": true, "port": 10200 }
+}
+```
+
+`ocx sync` then writes `base_url = "http://127.0.0.1:10200/v1"` into the managed Codex provider block
+and omits the auth header, so a directly spawned app-server works without any credential plumbing.
+
+The port is required and must differ from the proxy port. It is never OS-assigned: an ephemeral port
+would change across restarts while already-running app-servers kept the previous `base_url`.
+
+The listener serves only `POST /v1/responses`, its WebSocket upgrade, `POST /v1/responses/compact`,
+and `GET /v1/models`. Everything else, including `/api/*` and the dashboard, returns `404`.
+
+:::danger[This is an unauthenticated surface]
+Every process on the machine can use this listener. It spends account quota and paid provider
+credentials, and it can exhaust the shared turn capacity that authenticated remote clients depend
+on. Do not enable it on a shared or multi-tenant host.
+
+Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:
+a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
+same `Host` and `Origin` checks as an ordinary loopback bind. Off by default.
 :::
 
 ### SSH port forwarding
@@ -129,7 +167,7 @@ without that metadata retain the legacy prefix behavior.
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```
