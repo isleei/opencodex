@@ -60,7 +60,7 @@ description: Все способы, которыми opencodex аутентиф�
 | --- | --- | --- |
 | `key` | Отправляет ваш API-ключ (`Authorization: Bearer …` либо `x-api-key` / `api-key` в зависимости от адаптера). Ключ может быть литералом или ссылкой вида `${ENV_VAR}`. | Большинство провайдеров. |
 | `forward` | Передаёт провайдеру **входящие заголовки аутентификации Codex** без изменений — ключ не хранится. Это сквозной режим (passthrough) входа через ChatGPT. | OpenAI (адаптер `openai-responses`). |
-| `oauth` | Берёт сохранённый OAuth-токен доступа (автоматически обновляется до истечения срока) и использует его как bearer-ключ. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Берёт сохранённый OAuth-токен доступа (автоматически обновляется до истечения срока) и использует его как bearer-ключ. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, Command Code, GitHub Copilot, Nous Portal. |
 
 Повтор при 429 на том же ключе ([`retryOn429`](/ru/reference/configuration/)) применим только к
 провайдерам с API-ключом (`authMode: "key"`). Пресеты OAuth, forward и local исключены — их
@@ -93,7 +93,7 @@ account id, OpenAI beta/originator/session — см. [Адаптеры](/ru/refe
 
 ## 2. Вход по аккаунту (OAuth)
 
-Семь пресетов провайдеров используют вход через OAuth — плюс GitHub Copilot через
+Восемь пресетов провайдеров используют вход через OAuth — плюс GitHub Copilot через
 экспериментальный неофициальный мост device flow. opencodex хранит их учётные данные в
 `~/.opencodex/auth.json` и обновляет их автоматически. CLI входа также принимает `chatgpt`: эта
 команда получает учётные данные ChatGPT и одновременно создаёт запись провайдера в режиме `forward`.
@@ -102,6 +102,7 @@ account id, OpenAI beta/originator/session — см. [Адаптеры](/ru/refe
 ocx login xai          # xAI Grok
 ocx login anthropic    # Anthropic Claude (Pro/Max)
 ocx login kimi         # Moonshot Kimi
+ocx login nous         # Nous Portal (device grant; модели free + paid)
 ocx login kiro         # импорт учётных данных kiro-cli (с фолбэком на токен)
 ocx login google-antigravity
 ocx login cursor       # отдельный PKCE-вход Cursor
@@ -116,10 +117,13 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | Каталог Grok загружается в реальном времени; фолбэк по умолчанию — `grok-4.5`. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Модели Claude; актуальный список моделей загружается из `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Модели Kimi K2.7/K2.6/K2.5 для кодинга. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install | bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1' | iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
+| `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Шлюз подписки Nous Research (тот же бэкенд, что использует Hermes Agent). Вход по device grant против `portal.nousresearch.com`; access-токен — это JWT для каждого запроса к inference. Смешанный каталог платных + `:free` моделей (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, …) обнаруживается вживую по авторизованному аккаунту. Refresh-токены одноразовые и ротируются при каждом обновлении. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth поверх протокола Cloud Code Assist. Живое обнаружение использует аутентифицированный CCA-эндпоинт `v1internal:fetchAvailableModels` и публикует только agent-модели, доступные текущему аккаунту; поддерживаемый каталог остаётся резервным вариантом. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Экспериментальный PKCE-вход, живой транспорт HTTP/2 и обнаружение моделей с фильтрацией по аккаунту. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Экспериментально. Device flow GitHub + обмен `copilot_internal` (OAuth-клиент VS Code). Требуется активная подписка Copilot; это не официальный сторонний API. |
+
+После терминального сбоя обновления Nous выполните `ocx login nous`, чтобы пройти повторную аутентификацию.
 
 Для канонических пресетов Kimi Coding Plan (вход через аккаунт `kimi` и API-ключ `kimi-code`)
 opencodex передаёт в запрос Chat Completions только стабильный `prompt_cache_key`, предоставленный
@@ -139,6 +143,19 @@ OAuth-провайдеры, чьи учётные данные содержат 
 `chatgpt` всегда занимает один слот, поскольку у пула аккаунтов Codex отдельный реестр. Токены остаются в `~/.opencodex/auth.json`;
 `/api/oauth/accounts` возвращает только маскированные метаданные.
 
+### Импорт Cockpit Tools Antigravity
+
+В v1 OpenCodex импортирует только JSON-экспорт **Cockpit Tools Antigravity** для провайдера `google-antigravity`. На вкладке «Аккаунты» этого провайдера в панели Providers выберите локальный JSON-файл. Панель не показывает содержимое файла или значения учётных данных: она выводит только числа импортированных, обновлённых, ошибочных и неподдерживаемых записей. Другие провайдеры Cockpit в v1 не поддерживаются.
+
+CLI принимает экспорт только из файла или stdin — не вставляйте его в аргумент команды:
+
+```bash
+ocx account import google-antigravity --format cockpit-tools --file <path> [--json]
+cat accounts.json | ocx account import google-antigravity --format cockpit-tools --stdin [--json]
+```
+
+Inline JSON и лишние позиционные аргументы отклоняются. Храните экспортированные файлы приватно и удаляйте их или защищайте после импорта.
+
 ### Импорт учётных данных Kiro
 
 Для входа Kiro требуется Kiro CLI: в Unix установите его командой `curl -fsSL https://cli.kiro.dev/install | bash`, в Windows PowerShell — `irm 'https://cli.kiro.dev/install.ps1' | iex`, затем сначала выполните `kiro-cli login`. Если сессии `kiro-cli` нет, `ocx login kiro` использует вставленный токен доступа или переменную окружения `KIRO_ACCESS_TOKEN`.
@@ -154,7 +171,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 78 встроенными пресетами: 66 на основе ключей, восемь OAuth, три локальных и
+opencodex поставляется с 79 встроенными пресетами: 67 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -164,8 +181,9 @@ opencodex поставляется с 78 встроенными пресетам
 [условиях Cline](https://cline.bot/tos). Маршрут вида `cline-pass/cline-pass/kimi-k3`
 намеренный: первая часть выбирает провайдера opencodex, а полный slug `cline-pass/kimi-k3`
 отправляется upstream. Использование учитывается в общих для аккаунта скользящем 5-часовом,
-недельном и месячном лимитах. Сейчас opencodex публикует только проверенный на живом API reasoning tier
-`low`; более высокие запросы ограничиваются до `low`, пока шлюз не опубликует или не подтвердит более широкий диапазон.
+недельном и месячном лимитах. Проверка живого API 2026-08-13 подтвердила, что все статические модели ClinePass
+принимают на входе шлюза `low`, `medium`, `high`, `xhigh` и `max`. opencodex сохраняет запрошенный tier без изменения;
+нормализация для конкретного backend остаётся ответственностью ClinePass.
 
 **Cline** использует тот же ключ и эндпоинт с оплатой по мере использования и доступом к 100+ моделям
 (ID в формате OpenRouter, например `anthropic/claude-sonnet-4-6`). Промо-бесплатные модели Cline
@@ -199,6 +217,7 @@ opencodex поставляется с 78 встроенными пресетам
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -211,6 +230,7 @@ opencodex поставляется с 78 встроенными пресетам
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -313,6 +333,14 @@ Project ID и dedicated deployment настраиваются как custom prov
 Индивидуальные plan предназначены для interactive/prototype; произвольные приложения требуют Scale
 plan. Ключ создаётся в [дашборде Featherless](https://featherless.ai/account/api-keys).
 
+**Discovery для Novita.** Пресет с ключом использует adapter `openai-chat` и отправляет Bearer key
+только на фиксированный OpenAI-совместимый host Novita. Из публичного списка моделей остаются лишь
+строки, одновременно указывающие `model_type: chat` и endpoint `chat/completions`; discovery ограничен
+512 KiB и 256 исходными строками. Поскольку catalog публичный, login сообщает, что ключ невозможно
+проверить, а не считает успешный список доказательством. Возможности зависят от модели, поэтому пресет
+не заявляет provider-wide parallel tool calls или OpenAI `reasoning_effort`. Ключ создаётся в
+[Novita key manager](https://novita.ai/settings/key-management).
+
 > **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),
 > а для общего/промышленного использования — командный ключ с правом **Call Model APIs**. Выделенные конечные точки Truss `predict` используют другие хосты и
@@ -394,8 +422,12 @@ Cursor отслеживается отдельно как эксперимент
 `ocx init` и в селекторе Add Provider дашборда как экспериментальная запись локальной конфигурации
 с метаданными статического резервного каталога моделей Cursor. Когда настроен токен доступа Cursor,
 opencodex использует живой транспорт HTTP/2 Cursor. Его встроенный резервный список включает
-`gpt-5.6-sol` / `terra` / `luna` (контекст 1M), `grok-4.5` / `grok-4.5-fast` (500K) и `kimi-k3`
-(262K); живое обнаружение решает, какие из них останутся видимыми для аккаунта. Cursor отдаёт
+`gpt-5.6-sol` / `terra` / `luna` (контекст 1M), обычные/Fast-строки Grok 4.5 и 4.6 (500K) и
+`kimi-k3` (262K); живое обнаружение решает, какие из них останутся видимыми для аккаунта. Для
+Grok 4.6 в обеих формах доступны `low` / `medium` / `high` / `xhigh`, а для 4.5 — только до `high`.
+Fast-запросы передают соответствующую базовую модель Grok с отдельными параметрами `effort` и
+`fast=true` в `requested_model`; плоские id `cursor-grok-{version}-{effort}-fast` служат только
+идентификаторами discovery и picker. Cursor отдаёт
 Kimi K3 только через wire id с суффиксом усилия, поэтому `cursor/kimi-k3` предоставляет лестницу
 `low` / `high` / `max` и по умолчанию использует `max` — как и задокументированное значение по
 умолчанию в API модели. Управляемое сервером Cursor

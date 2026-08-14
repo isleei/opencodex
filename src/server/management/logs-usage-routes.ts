@@ -50,6 +50,7 @@ import {
 import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
+  usageLogIdentityKey,
   usageLogRevisionKey,
   type PersistedUsageEntry,
 } from "../../usage/log";
@@ -87,6 +88,7 @@ import {
   resetUsageSummaryCacheForTests,
   setUsageSummaryCacheEntry,
 } from "./usage-summary-cache";
+import { cacheApiKeyUsageFromSnapshot } from "./api-key-usage";
 
 const USAGE_DAY_MS = 86_400_000;
 /** Max entries accepted in one POST /api/usage/ingest body. */
@@ -241,6 +243,29 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   return { ...summary, since, generatedAt: now };
 }
 
+/**
+ * Timestamp bounds of the rows the bounded reader actually loaded.
+ *
+ * Deliberately computed over the whole snapshot, BEFORE `summarizeUsage` applies the range
+ * and surface predicates: truncation is a property of the read, not of the query, so the
+ * window that matters to a client is the one the reader could see. It is not a completeness
+ * claim and must never be presented as one. `usage.jsonl` is appended when a request
+ * COMPLETES while each row carries the request START time, so a long-running request can be
+ * appended after shorter ones that started later — meaning the oldest loaded timestamp does
+ * not bound what the dropped prefix contains (#1497).
+ */
+function snapshotWindow(entries: PersistedUsageEntry[]): { start: number | null; end: number | null } {
+  let start: number | null = null;
+  let end: number | null = null;
+  for (const entry of entries) {
+    const at = entry.timestamp;
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    if (start === null || at < start) start = at;
+    if (end === null || at > end) end = at;
+  }
+  return { start, end };
+}
+
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -312,12 +337,16 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     try {
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
-      const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
+      const observed = currentUsageLogRevision();
+      const identityKey = `${usageLogIdentityKey(observed)}\0${effectiveReadLimit}`;
+      const observedSize = observed?.size ?? 0;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached
-        && cached.revisionKey === observedRevisionKey
+        && cached.identityKey === identityKey
+        && cached.maxReadBytes === effectiveReadLimit
         && cached.overlayVersion === userCostOverlayVersion()
-        && now < cached.expiresAt) {
+        && now < cached.freshUntil
+        && observedSize >= cached.lastSeenSize) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
@@ -329,12 +358,15 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const overlayVersion = userCostOverlayVersion();
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
+      const window = snapshotWindow(snapshot.entries);
       const summary = {
         ...summarizeUsage(snapshot.entries, range, now, surface),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
         entriesDropped: snapshot.entriesDropped,
+        snapshotWindowStart: window.start,
+        snapshotWindowEnd: window.end,
       };
       if (userCostOverlayVersion() !== overlayVersion) {
         // The overlay changed while the summary was being computed, so this
@@ -343,13 +375,45 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         // mixed-price entry under either version.
         return jsonResponse(summary);
       }
-      setUsageSummaryCacheEntry(cacheKey, {
-        revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
-        overlayVersion,
-        expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
-        revisionReadAt,
-        summary,
-      });
+      const freshUntil = now + 60_000;
+      const snapshotIdentity = `${usageLogIdentityKey(snapshot.revision)}\0${effectiveReadLimit}`;
+      const revisionKey = `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`;
+      const lastSeenSize = snapshot.revision?.size ?? 0;
+      const ranges: UsageRange[] = ["7d", "30d", "all"];
+      const surfaces: UsageSurface[] = ["all", "codex", "claude", "grok"];
+      for (const nextRange of ranges) {
+        for (const nextSurface of surfaces) {
+          const nextSummary = nextRange === range && nextSurface === surface ? summary : {
+            ...summarizeUsage(snapshot.entries, nextRange, now, nextSurface),
+            historyTruncated: summary.historyTruncated,
+            truncatedPrefixBytes: summary.truncatedPrefixBytes,
+            entriesTruncated: summary.entriesTruncated,
+            entriesDropped: summary.entriesDropped,
+            snapshotWindowStart: summary.snapshotWindowStart,
+            snapshotWindowEnd: summary.snapshotWindowEnd,
+          };
+          setUsageSummaryCacheEntry(`${nextRange}:${nextSurface}`, {
+            revisionKey,
+            identityKey: snapshotIdentity,
+            maxReadBytes: effectiveReadLimit,
+            overlayVersion,
+            expiresAt: usageSummaryExpiresAt(snapshot.entries, nextRange, nextSurface, now),
+            freshUntil,
+            lastSeenSize,
+            revisionReadAt,
+            summary: nextSummary,
+          });
+        }
+      }
+      cacheApiKeyUsageFromSnapshot(
+        snapshot.entries,
+        (config.apiKeys ?? []).map(key => key.id),
+        usageLogIdentityKey(snapshot.revision),
+        snapshot.revision?.size ?? 0,
+        snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
+        effectiveReadLimit,
+        now,
+      );
       return jsonResponse(summary);
     } catch {
       return jsonResponse({
@@ -381,10 +445,13 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         days: [],
         models: [],
         providers: [],
+        accounts: [],
         historyTruncated: false,
         truncatedPrefixBytes: 0,
         entriesTruncated: false,
         entriesDropped: 0,
+        snapshotWindowStart: null,
+        snapshotWindowEnd: null,
         error: "read_failed",
       });
     }

@@ -57,7 +57,7 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | --- | --- | --- |
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
-| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, Command Code, GitHub Copilot, Nous Portal. |
 
 The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
 providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
@@ -89,7 +89,7 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
-Seven provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
+Eight provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
 CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
@@ -98,6 +98,7 @@ CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider e
 ocx login xai          # xAI Grok
 ocx login anthropic    # Anthropic Claude (Pro/Max)
 ocx login kimi         # Moonshot Kimi
+ocx login nous         # Nous Portal (device grant; free + paid models)
 ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
@@ -112,10 +113,13 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding models. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
+| `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+
+After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
@@ -134,6 +138,19 @@ active account without logging the others out. Only identity-less Kimi credentia
 active slot; Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
+
+### Cockpit Tools Antigravity import
+
+For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.
+
+The CLI accepts the export from a file or standard input only — never paste it into a command argument:
+
+```bash
+ocx account import google-antigravity --format cockpit-tools --file <path> [--json]
+cat accounts.json | ocx account import google-antigravity --format cockpit-tools --stdin [--json]
+```
+
+Inline JSON and extra positional arguments are rejected. Keep exported files private and delete or store them securely after import.
 
 ### OAuth reliability
 
@@ -199,7 +216,6 @@ also needs the local CLI binary: opencodex first uses `PATH`, then falls back to
 
 After a successful import, opencodex persists the imported credential to
 `~/.opencodex/auth.json`.
-
 Keep these variables and the selected database private. Do not attach database files or raw login
 diagnostics to bug reports.
 
@@ -217,7 +233,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 78 built-in presets: 66 key-based, eight OAuth, three local, and one default
+opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -226,8 +242,9 @@ and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), op
 [Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
 intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
 full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
-weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
-higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
+weekly, and monthly limits. A 2026-08-13 live probe verified that every static ClinePass model
+accepts `low`, `medium`, `high`, `xhigh`, and `max` at the gateway input boundary. opencodex
+preserves those requested tiers; any backend-specific normalization remains ClinePass's responsibility.
 
 **Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
 (OpenRouter-style ids like `anthropic/claude-sonnet-4-6`). Cline's promotional free models are only
@@ -261,6 +278,7 @@ free-experimentation model.
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -273,6 +291,7 @@ free-experimentation model.
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -291,6 +310,10 @@ wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
 Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
+The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
+keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
+Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
+streams close as incomplete rather than being reported as successful.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent
@@ -376,6 +399,15 @@ gate, and `features.tool_use: true`. Discovery is capped at 128 KiB and 100 raw 
 tens-of-thousands-model catalog is never downloaded or cached in full. Because `/v1/models` is documented as callable with or without authentication, it cannot prove a supplied key is valid; chat requests still use the configured Bearer key. Featherless terms reserve
 individual plans for interactive/prototyping use; arbitrary applications require a Scale plan.
 Create a key in the [Featherless dashboard](https://featherless.ai/account/api-keys).
+
+**Novita discovery.** The key-based preset uses the `openai-chat` adapter and sends its Bearer key
+only to Novita's fixed OpenAI-compatible host. Its public model list is filtered to rows that report
+both `model_type: chat` and the `chat/completions` endpoint, with discovery capped at 512 KiB and 256
+raw rows. Model ids must be preserved exactly as Novita returns them, including slash-delimited ids,
+and must not be normalized or rewritten before routing. Because the catalog is public, login reports
+the key as unverifiable instead of treating a successful list response as proof. Model capabilities
+vary, so the preset does not advertise provider-wide parallel tool calls or OpenAI `reasoning_effort`.
+Create a key in [Novita's key manager](https://novita.ai/settings/key-management).
 
 > **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key
@@ -471,8 +503,11 @@ Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` app
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
 live HTTP/2 transport. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
-`grok-4.5` / `grok-4.5-fast` (500K), and `kimi-k3` (262K); live discovery decides which remain
-visible for the account. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
+regular/Fast rows for Grok 4.5 and 4.6 (500K), and `kimi-k3` (262K); live discovery decides which
+remain visible for the account. Grok 4.6 exposes `low` / `medium` / `high` / `xhigh` in both forms,
+while 4.5 stops at `high`. Fast requests send the matching base Grok model with separate `effort`
+and `fast=true` `requested_model` parameters; flattened `cursor-grok-{version}-{effort}-fast` ids
+are discovery and picker identities only. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
 model's documented API default. Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution
 is disabled by default because it bypasses Codex's approval and sandbox path; set

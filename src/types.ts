@@ -1,5 +1,26 @@
 import type { KiroOAuthMetadata } from "./oauth/types";
 
+/** Exact provider/credential namespace for process-local reasoning replay. */
+export interface OcxReasoningReplayIdentity {
+  providerName: string;
+  /** Opaque process-local digest of the exact upstream destination. */
+  providerDestinationIdentity: string;
+  adapterName: string;
+  modelId: string;
+  /** Opaque process-local credential identity; never a raw token or API key. */
+  credentialIdentity: string;
+}
+
+/**
+ * Stable holder shared by parsed-request copies and already-created bridges.
+ * Credential/provider rotation replaces `current` atomically without replacing
+ * the holder, so late tool-call cache writes see the active physical identity.
+ */
+export interface OcxReasoningReplayScopeRef {
+  readonly clientThreadId: string;
+  current?: Readonly<OcxReasoningReplayIdentity>;
+}
+
 export interface OcxParsedRequest {
   modelId: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
@@ -13,12 +34,16 @@ export interface OcxParsedRequest {
   _rawBody?: unknown;
   /** Number of leading raw input items restored from local previous_response_id state. */
   _replayPrefixLen?: number;
+  /** Parsed-message index before the first conversational item in a continuation's current delta. */
+  _continuationConversationMessageIndex?: number;
   /** True when the proxy expanded a previous_response_id request into a full input replay. */
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
+  /** Provider/account/model-bound namespace for process-local raw-reasoning replay. */
+  _reasoningReplayScope?: OcxReasoningReplayScopeRef;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
@@ -752,6 +777,16 @@ export interface OcxConfig {
    * - "v2": force ALL models to v2 surface (override upstream pins)
    */
   multiAgentMode?: "v1" | "default" | "v2";
+  /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
+  agentTaskRecovery?: {
+    enabled?: boolean;
+    /** ChatGPT model used by the recovery request. Default: gpt-5.6-sol. */
+    model?: string;
+    /** Recovery request timeout in milliseconds. Default: 45000. */
+    timeoutMs?: number;
+    /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
+    cacheEntries?: number;
+  };
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
@@ -995,6 +1030,19 @@ export interface OcxRoutingProfileUnknownEvidence {
   cost?: OcxRoutingUnknownEvidenceMode;
 }
 
+export interface OcxRoutingProfileCompatibilitySuite {
+  suiteId: string;
+  evidenceLayer: "protocol_conformance" | "live_route_compatibility";
+}
+
+export interface OcxRoutingProfileCompatibility {
+  requiredSuites?: OcxRoutingProfileCompatibilitySuite[];
+  minStatus?: "PROBED" | "VERIFIED";
+  maxEvidenceAgeMs?: number;
+  unknownEvidence?: OcxRoutingUnknownEvidenceMode;
+  degradedEvidence?: OcxRoutingUnknownEvidenceMode;
+}
+
 export interface OcxRoutingProfileConfig {
   /**
    * Explicit candidate allowlist (`provider/model` refs). No implicit
@@ -1010,6 +1058,8 @@ export interface OcxRoutingProfileConfig {
   limits?: OcxRoutingProfileLimits;
   /** How unknown evidence is handled per dimension. */
   unknownEvidence?: OcxRoutingProfileUnknownEvidence;
+  /** Optional Compatibility Lab policy (CL-06). */
+  compatibility?: OcxRoutingProfileCompatibility;
 }
 
 /**
@@ -1111,6 +1161,14 @@ export interface OcxWebSearchSidecarConfig {
    * during a web-search turn. Default 200000. Must be an integer from 1 through 2147483647.
    */
   routedModelStallTimeoutMs?: number;
+  /**
+   * Stream the routed model's leading output (text/thinking deltas) live instead of buffering the
+   * whole iteration. Live delivery stops at the first tool-call boundary so web_search interception
+   * stays atomic. Tradeoff: text the model emits BEFORE deciding to search — which buffered mode
+   * silently drops — becomes visible to the client and may partially repeat in the post-search
+   * answer. Default: false (buffered, previous behavior).
+   */
+  streamRoutedModelOutput?: boolean;
 }
 
 export interface OpenRouterProviderRouting {
@@ -1210,9 +1268,9 @@ export interface OcxProviderConfig {
    */
   statelessResponses?: boolean;
   /**
-   * Responses upstream whose parser requires each tool result to immediately follow
-   * its matching call. When enabled, only unambiguous matched pairs are reordered;
-   * intervening messages are preserved after the result instead of being dropped.
+   * Responses upstream whose parser requires an unambiguous call batch and its matched
+   * result batch to remain contiguous. Hook-injected context that splits the batch is
+   * preserved after it, and parallel calls stay together with the reasoning turn that produced them.
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
@@ -1379,6 +1437,12 @@ export interface OcxProviderConfig {
   /** Model ids that reject caller-specified presence/frequency penalty values. */
   noPenaltyModels?: string[];
   /**
+   * Model ids whose Chat Completions endpoint rejects `response_format`.
+   * Structured-output translation remains enabled by default; this is a narrow
+   * per-model compatibility escape hatch for mixed-capability gateways.
+   */
+  noStructuredOutputModels?: string[];
+  /**
    * Allow multiple tool calls per completion. DEFAULT-ON for openai-chat providers (the
    * buffered stream parser assembles interleaved/fragmented multi-call turns safely);
    * set `false` to force `parallel_tool_calls:false` upstream and drop the catalog's
@@ -1392,6 +1456,15 @@ export interface OcxProviderConfig {
    * fields. Default off; only enable for providers that document this parameter.
    */
   promptCacheKey?: boolean;
+  /**
+   * Opt-in: forward `service_tier` to the upstream `/chat/completions` body.
+   * OpenAI-specific extension with the same hazard as `promptCacheKey` — strict backends
+   * reject unknown fields, and 66 registry providers share the `openai-chat` adapter, so a
+   * caller-supplied `service_tier` would otherwise turn working requests into upstream 400s.
+   * `supportsServiceTier` is the Responses-wire flag and does not apply here.
+   * Default off; only enable for providers that document this parameter on the chat wire.
+   */
+  chatServiceTier?: boolean;
   /**
    * Provider-local passthrough SSE repair for broken openai-responses gateways that reuse exact
    * placeholder message/reasoning ids or omit the terminal id after a stable added event.
