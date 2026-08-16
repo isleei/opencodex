@@ -158,7 +158,7 @@ test("full-form add submits model id plus optional metadata for the current prov
   await act(async () => { root.unmount(); });
 });
 
-test("full-form blocks existing and namespaced model ids", async () => {
+test("full-form blocks existing ids but allows namespaced model ids", async () => {
   let requests = 0;
   globalThis.fetch = (async (_input, init) => {
     if (!init?.method || init.method === "GET") return Response.json([]);
@@ -171,6 +171,24 @@ test("full-form blocks existing and namespaced model ids", async () => {
   await enterModelId(input, "claude-opus-5");
   expect(saveButton.disabled).toBe(true);
   await enterModelId(input, "vendor/model");
+  expect(saveButton.disabled).toBe(false);
+  expect(requests).toBe(0);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("full-form blocks a slash id that encodes to an existing native id", async () => {
+  let requests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    if (!init?.method || init.method === "GET") return Response.json([]);
+    requests += 1;
+    return Response.json({ id: "unexpected" }, { status: 201 });
+  }) as typeof fetch;
+  const colliding = { ...item, models: ["openai-gpt-5.5"], defaultModel: "openai-gpt-5.5" } as WorkspaceItem;
+  const { root, openAdd } = await mountProviderModels(["openai-gpt-5.5"], undefined, colliding);
+  const { input, saveButton } = await openAddModal(openAdd);
+
+  await enterModelId(input, "openai/gpt-5.5");
   expect(saveButton.disabled).toBe(true);
   expect(requests).toBe(0);
 

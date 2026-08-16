@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
+import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
 import { IconRefresh } from "../../icons";
 import { Notice, Select } from "../../ui";
 import { CUSTOM_OPTION } from "../../pages/models-shared";
@@ -291,15 +292,23 @@ export default function ProviderModels({
   const editingCurrentId = modalMode === "edit"
     ? customModels.find(m => m.id === editId)?.modelId
     : undefined;
+  const knownModelIds = useMemo(() => [
+    ...availableModels,
+    ...customModelIds,
+    ...configuredModels,
+    ...(item.defaultModel ? [item.defaultModel] : []),
+  ], [availableModels, customModelIds, configuredModels, item.defaultModel]);
+
   const formModelIdTaken = (() => {
     if (!trimmedFormModelId) return false;
-    if (trimmedFormModelId.includes("/")) return true;
     // Keep the current id editable; only block collisions with *other* models.
     if (editingCurrentId && trimmedFormModelId === editingCurrentId) return false;
     if (customModels.some(m => m.modelId === trimmedFormModelId && m.id !== editId)) return true;
     if (availableModels.includes(trimmedFormModelId)) return true;
     if (configuredModels.includes(trimmedFormModelId)) return true;
     if (item.defaultModel === trimmedFormModelId) return true;
+    const others = knownModelIds.filter(id => id !== editingCurrentId);
+    if (encodedModelIdCollides(trimmedFormModelId, others)) return true;
     return false;
   })();
 
