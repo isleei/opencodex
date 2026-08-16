@@ -29,8 +29,9 @@ export function DashboardOverviewHead({
   maHelpOpen,
   setMaHelpOpen,
   switchMaMode,
+  maError,
   updateCheck,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "updateCheck">) {
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError" | "updateCheck">) {
   const t = useT();
   const online = health?.status === "ok";
   const localVersion = updateCheck?.currentVersion ?? health?.version ?? "—";
@@ -73,11 +74,16 @@ export function DashboardOverviewHead({
                     onClick={() => void switchMaMode(mode)}
                   >{t(`models.v2Mode_${mode}` as TKey)}</button>
                 ))}
+             </div>
+           </div>
+            {maError && (
+              <div role="alert" className="text-caption" style={{ color: "var(--red)", marginTop: 4, textAlign: "center", maxWidth: 280, wordBreak: "break-word" }}>
+                {maError}
               </div>
-            </div>
-          </div>
-          <div className="stat" aria-busy={healthLoading || undefined}>
-            <div className="label">{t("dash.status")}</div>
+            )}
+         </div>
+         <div className="stat" aria-busy={healthLoading || undefined}>
+           <div className="label">{t("dash.status")}</div>
             <div className="value" style={{ display: "flex", alignItems: "center", gap: 9, color: online ? "var(--green)" : "var(--red)" }}>
               <span className={`dot ${online ? "dot-green" : "dot-red"}`} />{online ? t("dash.online") : t("dash.offline")}
             </div>

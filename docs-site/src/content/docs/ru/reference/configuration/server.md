@@ -13,10 +13,11 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `port` | `number` | `10100` | Порт, который слушает прокси. |
 | `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL исходящего HTTP(S)-прокси или `${ENV_VAR}`. Применяется к `HTTP_PROXY` / `HTTPS_PROXY` только когда эти переменные не заданы; loopback всегда остаётся в `NO_PROXY`. |
+| `emptyCompletionRetry?` | `boolean` | `false` | Явно включает один идентичный повтор Responses, если completion не содержит ни текста, ни tool call. Повтор может тарифицироваться. `OCX_EMPTY_COMPLETION_RETRY=0` отключает его без изменения config; combo и routed-compaction turn исключены. |
 | `stallTimeoutSec?` | `number` | `300` | Секунды без upstream-данных до `response.incomplete`. Минимум 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
-| `websockets?` | `boolean` | `false` | Объявлять `supports_websockets` для WebSocket-пути Responses. Значение false удерживает HTTP/SSE. |
+| `websockets?` | `boolean` | `false` | Объявляет и разрешает клиентский WebSocket-путь Responses. При false клиенты используют HTTP/SSE; это не отключает подходящую upstream WS-оптимизацию canonical ChatGPT. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Дополнительные точные origin, разрешённые CORS. Loopback-origin разрешены всегда. Поддерживаются authority-based origin браузерных расширений, например `chrome-extension://<extension-id>`; `*` не является маской. Firefox и Safari пересоздают UUID расширения (при каждой установке/запуске браузера), поэтому обновляйте запись при смене origin. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…`, принимаемые для management и data-plane auth на не-loopback bind'ах. Управляются через дашборд. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |

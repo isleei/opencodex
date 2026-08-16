@@ -21,7 +21,6 @@ import { restoreNativeCodexAsync } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
 import { afterCatalogWriteHandleAppServers } from "../codex/app-server-processes";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { serviceCommand } from "../service";
 
 export interface CliDispatchDeps {
   args: string[];
@@ -45,6 +44,7 @@ export interface CliDispatchDeps {
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
   handleReady: (args: ReadyArgs) => Promise<number>;
+  serviceCommand: (...args: string[]) => Promise<void>;
 }
 
 type CommandRunner = (deps: CliDispatchDeps) => Promise<number>;
@@ -261,8 +261,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   service: async deps => {
-    await serviceCommand(...deps.args.slice(1));
-    return 0;
+    process.exitCode = 0;
+    await deps.serviceCommand(...deps.args.slice(1));
+    // serviceCommand uses process.exitCode for recoverable install/stop failures
+    // that must finish cleanup before the single top-level process.exit runs.
+    return Number(process.exitCode ?? 0);
   },
   tray: async deps => {
     const { windowsTrayCommand } = await import("../tray/windows");
@@ -488,6 +491,18 @@ const commandRunners: Record<string, CommandRunner> = {
   pi: async deps => {
     const { handlePiCommand } = await import("./pi");
     return await handlePiCommand(deps.args.slice(1));
+  },
+  "sync-cloud": async deps => {
+    const { handleSyncCloudCommand } = await import("./sync-cloud");
+    return await handleSyncCloudCommand(deps.args.slice(1));
+  },
+  mcode: async deps => {
+    const { cmdMcode } = await import("./minimax");
+    return await cmdMcode(deps.args.slice(1));
+  },
+  mmx: async deps => {
+    const { cmdMmx } = await import("./minimax");
+    return await cmdMmx(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

@@ -6,13 +6,20 @@ import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS } from "./mode
 // CLI resolves labels against. The ids below separate CCA wire ids, collapsed picker entries,
 // and hidden compatibility aliases for saved selections. The CCA envelope's `model` field must
 // receive the wire id (for example "Gemini 3.1 Pro (High)" => gemini-pro-agent), while the
-// picker exposes collapsed base models only when CCA returns every known tier; otherwise each
-// returned wire id remains visible so an unavailable tier cannot be selected.
+// picker exposes collapsed known base models only when CCA returns every known tier; unknown
+// returned wire ids remain visible so they stay directly routable.
 
 // ── Wire IDs (what CCA :fetchAvailableModels returns) ──
 
 /** Current Antigravity Flash generation. */
 const GEMINI_FLASH_CURRENT = "gemini-3.7-flash";
+
+/**
+ * Wire ID that CCA actually accepts for the current Flash generation.
+ * Google renamed the model to include a `-tiered` suffix; the picker-visible
+ * ID stays `gemini-3.7-flash` (stripped by `pickerModelIdForDiscoveredWireId`).
+ */
+const GEMINI_FLASH_WIRE_ID = "gemini-3.7-flash-tiered";
 
 /**
  * Retired Flash ids → the reasoning tier they used to encode.
@@ -42,7 +49,7 @@ const RETIRED_FLASH_TIERS: Record<string, string> = {
 };
 
 const ANTIGRAVITY_WIRE_MODELS = [
-  "gemini-3.7-flash",
+  "gemini-3.7-flash-tiered",
   "gemini-3.1-pro-low",
   "gemini-pro-agent",
   "gemini-3.1-flash-image",
@@ -62,6 +69,41 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
   (out[pickerId] ??= []).push(wireId);
   return out;
 }, {});
+
+const ANTIGRAVITY_DISCOVERY_EFFORTS = ["low", "medium", "high"] as const;
+
+function pickerModelIdForDiscoveredWireId(
+  wireId: string,
+  available: ReadonlyMap<string, Record<string, unknown>>,
+): string {
+  const explicitPickerId = Object.hasOwn(ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID, wireId)
+    ? ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId]
+    : undefined;
+  if (explicitPickerId) {
+    const requiredWireIds = Object.hasOwn(ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL, explicitPickerId)
+      ? ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL[explicitPickerId] ?? []
+      : [];
+    if (requiredWireIds.every(id => available.has(id))) return explicitPickerId;
+  }
+
+  // CCA uses a single `-tiered` row for models whose effort levels ride on the
+  // request's thinkingLevel field. Keep this generic so new tiered models do not
+  // require another provider-specific ID mapping.
+  if (wireId.endsWith("-tiered")) {
+    const baseId = wireId.slice(0, -"-tiered".length);
+    if (isKnownAntigravityPickerModelId(baseId)) return baseId;
+  }
+
+  const effortMatch = /^(.*)-(low|medium|high)$/.exec(wireId);
+  if (effortMatch) {
+    const baseId = effortMatch[1]!;
+    if (isKnownAntigravityPickerModelId(baseId)
+      && ANTIGRAVITY_DISCOVERY_EFFORTS.every(effort => available.has(`${baseId}-${effort}`))) {
+      return baseId;
+    }
+  }
+  return wireId;
+}
 
 // ── Effort ladders per collapsed base model ──
 // Gemini models: effort → wire model suffix (official agy UI pattern).
@@ -98,6 +140,19 @@ const ANTIGRAVITY_THINKING_LEVEL_MODELS: Record<string, string> = {
 // Flash generation, where it is an error rather than a quieter tier.
 const ANTIGRAVITY_THINKING_LEVELS = new Set(["low", "medium", "high"]);
 
+/**
+ * Picker-visible model IDs whose CCA wire ID differs (the `-tiered` rename).
+ * Models not listed here use themselves as the wire ID.
+ */
+const ANTIGRAVITY_PICKER_TO_WIRE: Record<string, string> = {
+  "gemini-3.7-flash": GEMINI_FLASH_WIRE_ID,
+};
+
+/** Map a picker-visible base model to its CCA wire ID. Identity when no mapping exists. */
+function pickerToWireId(pickerId: string): string {
+  return ANTIGRAVITY_PICKER_TO_WIRE[pickerId] ?? pickerId;
+}
+
 function resolveAntigravityThinkingLevel(effort: string): string | undefined {
   if (effort === "xhigh" || effort === "max" || effort === "ultra") return "high";
   return ANTIGRAVITY_THINKING_LEVELS.has(effort) ? effort : undefined;
@@ -122,7 +177,7 @@ const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
   // because `parseAntigravityAvailableModels` uses THIS map to keep a stale CCA
   // payload from republishing a dead wire id as a picker row.
   ...Object.fromEntries(
-    Object.keys(RETIRED_FLASH_TIERS).map(retired => [retired, GEMINI_FLASH_CURRENT]),
+    Object.keys(RETIRED_FLASH_TIERS).map(retired => [retired, GEMINI_FLASH_WIRE_ID]),
   ),
 };
 
@@ -141,9 +196,13 @@ export const ANTIGRAVITY_MODELS = [
   "gpt-oss-120b-medium",
 ];
 
+function isKnownAntigravityPickerModelId(value: string): boolean {
+  return isValidModelDiscoveryModelId(value) && ANTIGRAVITY_MODELS.includes(value);
+}
+
 // Context windows from the upstream `:fetchAvailableModels` maxTokens per model.
 const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  "gemini-3.7-flash": 1_048_576,
+  "gemini-3.7-flash-tiered": 1_048_576,
   "gemini-3.1-pro-low": 1_048_576,
   "gemini-pro-agent": 1_048_576,
   "gemini-3.1-flash-image": 1_048_576,
@@ -222,6 +281,7 @@ export function parseAntigravityAvailableModels(
       if (!Array.isArray(modelIds)) return null;
       for (const id of modelIds) {
         if (!isValidModelDiscoveryModelId(id)
+          || !Object.hasOwn(models, id)
           || !antigravityRecord(models[id])
           || ids.length >= limit) return null;
         ids.push(id);
@@ -235,6 +295,19 @@ export function parseAntigravityAvailableModels(
     if (ids.length >= limit) return null;
     ids.push("gemini-3.1-flash-image");
   }
+  // Newer CCA responses identify tiered Flash models through this index instead of
+  // adding their synthetic wire ids to agentModelSorts.
+  const tieredModelIds = antigravityRecord(body.tieredModelIds);
+  const flashTieredIds = tieredModelIds?.flash;
+  if (Array.isArray(flashTieredIds)) {
+    for (const id of flashTieredIds) {
+      if (!isValidModelDiscoveryModelId(id)
+        || !Object.hasOwn(models, id)
+        || !antigravityRecord(models[id])
+        || ids.length >= limit) return null;
+      ids.push(id);
+    }
+  }
 
   const available = new Map<string, Record<string, unknown>>();
   for (const wireId of ids) {
@@ -242,17 +315,17 @@ export function parseAntigravityAvailableModels(
     if (!info || available.has(wireId)) continue;
     // Legacy compatibility aliases are deliberately routed to newer wire ids for saved
     // selections. They are not safe as independently discovered picker rows.
-    if (ANTIGRAVITY_MODEL_ALIASES[wireId] && ANTIGRAVITY_MODEL_ALIASES[wireId] !== wireId) continue;
+    const alias = Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, wireId)
+      ? ANTIGRAVITY_MODEL_ALIASES[wireId]
+      : undefined;
+    if (alias && alias !== wireId) continue;
     available.set(wireId, info);
   }
 
   const out: AntigravityAvailableModel[] = [];
   const seen = new Set<string>();
   for (const [wireId, info] of available) {
-    const pickerId = ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId];
-    const completePickerSet = pickerId !== undefined
-      && ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL[pickerId]!.every(id => available.has(id));
-    const id = completePickerSet ? pickerId! : wireId;
+    const id = pickerModelIdForDiscoveredWireId(wireId, available);
     if (seen.has(id)) continue;
     seen.add(id);
     out.push({
@@ -265,7 +338,9 @@ export function parseAntigravityAvailableModels(
 }
 
 export function resolveAntigravityWireModelId(modelId: string): string {
-  return ANTIGRAVITY_MODEL_ALIASES[modelId] ?? modelId;
+  return Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, modelId)
+    ? ANTIGRAVITY_MODEL_ALIASES[modelId]
+    : modelId;
 }
 
 /**
@@ -279,7 +354,7 @@ export function isAntigravitySuffixModelId(modelId: string): boolean {
 
 /** The reasoning tier a retired Flash id used to encode, if it is one. */
 export function retiredAntigravityFlashTier(modelId: string): string | undefined {
-  return RETIRED_FLASH_TIERS[modelId];
+  return Object.hasOwn(RETIRED_FLASH_TIERS, modelId) ? RETIRED_FLASH_TIERS[modelId] : undefined;
 }
 
 /**
@@ -299,10 +374,10 @@ export function resolveAntigravityEffortWireModel(
   // Rule 0: retired Flash id — Google has taken the wire id offline, so route to the
   // current generation and carry the tier the retired id encoded. This runs BEFORE the
   // suffix check because those ids are aliases, and rule 1 would drop the tier.
-  const retiredTier = RETIRED_FLASH_TIERS[modelId];
+  const retiredTier = retiredAntigravityFlashTier(modelId);
   if (retiredTier) {
     return {
-      wireModelId: GEMINI_FLASH_CURRENT,
+      wireModelId: GEMINI_FLASH_WIRE_ID,
       thinkingLevel: effort ? resolveAntigravityThinkingLevel(effort) ?? retiredTier : retiredTier,
     };
   }
@@ -317,7 +392,7 @@ export function resolveAntigravityEffortWireModel(
   const defaultLevel = ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
   if (defaultLevel) {
     return {
-      wireModelId: modelId,
+      wireModelId: pickerToWireId(modelId),
       thinkingLevel: effort ? resolveAntigravityThinkingLevel(effort) ?? defaultLevel : defaultLevel,
     };
   }

@@ -110,6 +110,20 @@ path obtains System32 from `GetSystemDirectoryW`. Windows ARM64 Bun builds that 
 Task Scheduler launch, never consults environment variables or `PATH`, and fails closed when the
 fixed executable is absent.
 
+Direct PowerShell children rely on the process launcher's `windowsHide`/hidden-host mechanism and
+must not also receive the PowerShell CLI pair `-WindowStyle Hidden`. On affected Windows 11 systems,
+Bun 1.3.14 exits that direct invocation before the command runs, which turns a valid SID or process
+lookup into `EACLIDENTITY` or a failed sync. This does not apply to `Start-Process -WindowStyle
+Hidden` inside an already-running PowerShell script, nor to .NET/VBS process-window settings.
+
+[Decision Log]
+- 목적과 의도: keep trusted Windows identity and process probes console-less without triggering Bun's direct PowerShell `-WindowStyle Hidden` failure.
+- 기존 구현 및 제약 조건: the calls already used `windowsHide: true` or a hidden VBS host, but redundantly passed PowerShell's window-style CLI option; the same option remains valid inside `Start-Process` and must not be removed there.
+- 검토한 주요 대안: decode the generic failure specially, retry after failure, remove all hidden-window controls, or remove only the redundant direct CLI pair.
+- 선택한 방식: retain trusted executable resolution, non-interactive flags, timeouts, and process-level hiding; remove `-WindowStyle Hidden` only from direct PowerShell argv.
+- 다른 대안 대신 이 방식을 선택한 이유: the command executes on affected Bun/Windows combinations, no console window is introduced, and working elevated/detached child-process behavior stays unchanged.
+- 장점, 단점 및 영향: SID, process-owner, tray, update, and sync probes share the compatible launch contract; a future call must use launcher-level hiding rather than reintroducing the PowerShell CLI pair.
+
 [Decision Log]
 - 목적과 의도: Preserve required Windows ACL hardening on the bundled Windows ARM64 runtime without weakening executable trust.
 - 기존 구현 및 제약 조건: The effective-SID query depended on the shared `GetSystemDirectoryW` FFI resolver; Bun 1.3.14 Windows ARM64 has no working `bun:ffi`, so config mutation reached `EACLIDENTITY` before PowerShell could start.
@@ -145,7 +159,7 @@ matters for maintainers is which groups exist and who resolves them:
 | Routing | `defaultProvider`, `providers`, per-provider `selectedModels` | Explicit `provider/model` wins over `defaultProvider`. |
 | Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue`, `codexAccountNamespaces`, `codexAccountPickerEnabled` | Catalog state is derived; config only records intent. The picker flag is an explicit visibility override, while selector mappings remain the durable exact-routing contract. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
-| Transport | stream mode, timeouts, proxy settings, `websockets` | `streamMode` persists in config.json; Windows services need a persisted input, and macOS uses it for explicit eager-relay opt-in. |
+| Transport | stream mode, timeouts, proxy settings, `websockets`, `emptyCompletionRetry` | `streamMode` persists in config.json; Windows services need a persisted input, and macOS uses it for explicit eager-relay opt-in. Empty-completion replay is an explicit top-level opt-in because its second upstream request may be billable. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`05_gui-and-management-api.md`](05_gui-and-management-api.md). |
 

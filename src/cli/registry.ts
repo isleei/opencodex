@@ -216,8 +216,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "api-key", usage: "ocx api-key <list|create|remove> ...", summary: "Alias of ocx access key." },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (opencode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
@@ -283,6 +283,26 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "mcode",
+    usage: "ocx mcode [mcode args...]",
+    summary: "Launch MiniMax Code through its managed OpenCodex provider.",
+    details: [
+      "First connect the reversible file integration: ocx integration client enable --client mcode",
+      "The launcher verifies that custom_provider.opencodex targets the current loopback proxy before starting MCode.",
+      "Select custom_provider:opencodex/<model> from MCode's model picker.",
+    ],
+  },
+  {
+    name: "mmx",
+    usage: "ocx mmx text <chat|repl> [mmx args...]",
+    summary: "Launch MiniMax CLI text commands through the proxy.",
+    details: [
+      "Only the official MMX Anthropic-compatible text surface is proxied.",
+      "Use plain mmx for MiniMax-native image, video, speech, music, vision, search, quota, auth, config, file, and update commands.",
+      "The wrapper isolates ~/.mmx credentials and refuses --api-key/--base-url overrides.",
+    ],
+  },
+  {
     name: "restart",
     usage: "ocx restart",
     summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
@@ -344,6 +364,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Only providers.opencodex is written; other Pi providers and settings keys are preserved.",
       "Package install/remove shells out to `pi install` / `pi remove` (full system access).",
     ],
+  },
+  {
+    name: "sync-cloud",
+    usage: "ocx sync-cloud [status|login|pull|push|daemon|stop]",
+    summary: "Manage OneDrive cloud sync for config and logs.",
   },
   {
     name: "__refresh-version",

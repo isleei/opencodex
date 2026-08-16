@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
-import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
+import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels, resolveAntigravityEffortWireModel, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -56,7 +56,11 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.model).toBeUndefined();
     expect(env.request.safetySettings).toBeUndefined();
     expect(req.headers["Authorization"]).toBe("Bearer ya29.token");
-    expect(req.headers["User-Agent"]).toMatch(/^antigravity\/cli\/[\d.]+ \(aidev_client; os_type=\w+; arch=\w+\)$/);
+    // The exact default must not drift: Google gates models by family AND version,
+    // so any change to version/platform could silently re-lock gemini-3.7-flash.
+    expect(req.headers["User-Agent"]).toBe(
+      "antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)",
+    );
     // The literal "antigravity" giveaway UA must no longer be sent.
     expect(req.headers["User-Agent"]).not.toBe("antigravity");
     // x-goog-api-client is NOT sent on runtime requests (CLIProxyAPI only uses it during onboarding).
@@ -104,11 +108,11 @@ describe("antigravity CCA envelope", () => {
     for (const [alias, wire] of [
       // Google retires the previous Flash generation from CCA when the next ships, so
       // every retired id — 3.6 tiers included — now lands on 3.7.
-      ["gemini-3.5-flash-extra-low", "gemini-3.7-flash"],
-      ["gemini-3.5-flash-low", "gemini-3.7-flash"],
-      ["gemini-3.5-flash-mid", "gemini-3.7-flash"],
-      ["gemini-3.5-flash-high", "gemini-3.7-flash"],
-      ["gemini-3-flash-agent", "gemini-3.7-flash"],
+      ["gemini-3.5-flash-extra-low", "gemini-3.7-flash-tiered"],
+      ["gemini-3.5-flash-low", "gemini-3.7-flash-tiered"],
+      ["gemini-3.5-flash-mid", "gemini-3.7-flash-tiered"],
+      ["gemini-3.5-flash-high", "gemini-3.7-flash-tiered"],
+      ["gemini-3-flash-agent", "gemini-3.7-flash-tiered"],
       ["gemini-3.1-pro-high", "gemini-pro-agent"],
       ["gemini-3.1-pro-preview", "gemini-pro-agent"],
     ]) {
@@ -119,7 +123,7 @@ describe("antigravity CCA envelope", () => {
     for (const modelId of ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
       const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, modelId));
       // The retired tier ids no longer exist upstream; they route to the live model.
-      expect(JSON.parse(req.body).model).toBe("gemini-3.7-flash");
+      expect(JSON.parse(req.body).model).toBe("gemini-3.7-flash-tiered");
     }
   });
 
@@ -130,6 +134,50 @@ describe("antigravity CCA envelope", () => {
     });
 
     expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.7-flash-low",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-high",
+    ]))?.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "future-flash-low",
+      "future-flash-medium",
+      "future-flash-high",
+    ]))?.map(model => model.id)).toEqual([
+      "future-flash-low",
+      "future-flash-medium",
+      "future-flash-high",
+    ]);
+    expect(parseAntigravityAvailableModels(payload([
+      "future-flash-low",
+      "future-flash-high",
+    ]))?.map(model => model.id)).toEqual([
+      "future-flash-low",
+      "future-flash-high",
+    ]);
+    expect(parseAntigravityAvailableModels({
+      models: {
+        "future-flash-tiered": { maxTokens: 1_048_576 },
+      },
+      agentModelSorts: [{ groups: [{ modelIds: [] }] }],
+      tieredModelIds: { flash: ["future-flash-tiered"] },
+    })?.map(model => model.id)).toEqual(["future-flash-tiered"]);
+    expect(parseAntigravityAvailableModels({
+      models: {
+        "gemini-3.7-flash-tiered": { maxTokens: 1_048_576 },
+      },
+      agentModelSorts: [{ groups: [{ modelIds: [] }] }],
+      tieredModelIds: { flash: ["gemini-3.7-flash-tiered"] },
+    })?.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+    expect(parseAntigravityAvailableModels({
+      models: { "-tiered": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["-tiered"] }] }],
+    })?.map(model => model.id)).toEqual(["-tiered"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "-low",
+      "-medium",
+      "-high",
+    ]))?.map(model => model.id)).toEqual(["-low", "-medium", "-high"]);
+    expect(parseAntigravityAvailableModels(payload([
       "gemini-3.1-pro-low",
       "gemini-pro-agent",
     ]))?.map(model => model.id)).toEqual(["gemini-3.1-pro"]);
@@ -138,6 +186,33 @@ describe("antigravity CCA envelope", () => {
     ]))?.map(model => model.id)).toEqual([
       "gemini-3.1-pro-low",
     ]);
+  });
+
+  test("keeps unknown discovered tier IDs directly routable", async () => {
+    for (const modelId of ["future-flash-tiered", "future-flash-low"]) {
+      const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort(modelId, "high"));
+      const env = JSON.parse(req.body);
+      expect(env.model).toBe(modelId);
+      expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+    }
+  });
+
+  test("ignores inherited CCA model and alias properties", () => {
+    const inheritedModels = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(inheritedModels, "__proto__", {
+      value: { maxTokens: 1_048_576 },
+      enumerable: true,
+    });
+    const models = Object.create(inheritedModels);
+
+    expect(parseAntigravityAvailableModels({
+      models,
+      agentModelSorts: [{ groups: [{ modelIds: ["__proto__"] }] }],
+    })).toBeNull();
+    expect(resolveAntigravityWireModelId("__proto__")).toBe("__proto__");
+    expect(resolveAntigravityEffortWireModel("__proto__", "high")).toEqual({
+      wireModelId: "__proto__",
+    });
   });
 
   test("rejects malformed and oversized CCA agent-model lists", () => {
@@ -325,28 +400,28 @@ describe("antigravity CCA envelope", () => {
   test("gemini-3.7-flash with effort=high keeps the wire id + thinkingConfig", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash", "high"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
   test("gemini-3.7-flash with effort=low keeps the wire id + thinkingConfig", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash", "low"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
   });
 
   test("gemini-3.7-flash with no effort still sends the documented medium default", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("medium");
   });
 
   test("gemini-3.7-flash with effort=max clamps to high", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash", "max"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
@@ -384,7 +459,7 @@ describe("antigravity CCA envelope", () => {
     // A retired id must not keep its dead wire id, and an explicit effort still wins.
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash-low", "high"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
   });
 
@@ -393,14 +468,14 @@ describe("antigravity CCA envelope", () => {
     // survive as an explicit thinkingLevel or the user silently loses their choice.
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.6-flash-low"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
   });
 
   test("legacy 3.5 compat alias now resolves to 3.7 with an explicit effort", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.5-flash-high", "low"));
     const env = JSON.parse(req.body);
-    expect(env.model).toBe("gemini-3.7-flash");
+    expect(env.model).toBe("gemini-3.7-flash-tiered");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
   });
 

@@ -175,7 +175,7 @@ export function assertTrustedSystemExecutableForTests(candidate: string, label: 
   return assertTrustedSystemExecutable(candidate, label);
 }
 
-type ElevationExeOverrides = { powershell?: string; schtasks?: string };
+type ElevationExeOverrides = { powershell?: string; schtasks?: string; taskkill?: string };
 let elevationExeOverridesForTests: ElevationExeOverrides | null = null;
 
 /**
@@ -209,6 +209,15 @@ export function resolveTrustedWindowsSchtasksExe(): string {
   }
   const candidate = join(resolveTrustedWindowsSystemDirectory(), "schtasks.exe");
   return assertTrustedSystemExecutable(candidate, "schtasks.exe");
+}
+
+/** Absolute path to System32\\taskkill.exe from a trusted system directory. */
+export function resolveTrustedWindowsTaskkillExe(): string {
+  if (elevationExeOverridesForTests?.taskkill) {
+    return elevationExeOverridesForTests.taskkill;
+  }
+  const candidate = join(resolveTrustedWindowsSystemDirectory(), "taskkill.exe");
+  return assertTrustedSystemExecutable(candidate, "taskkill.exe");
 }
 
 /** Stable machine-readable marker for a denied `schtasks /create`. Crosses the CLI→proxy boundary. */
@@ -608,6 +617,43 @@ export function runWindowsElevated(file: string, args: string[]): Promise<number
     `if ($null -eq $p.ExitCode) { exit ${OCX_ELEVATED_PROTOCOL_FAILED} }`,
     "exit $p.ExitCode",
   ].join("");
+
+  return startPowerShellCommand(script).completion.then(result => result.exitCode);
+}
+
+/**
+ * Register one scheduled-task definition without exposing a mutable XML pathname to
+ * the elevated process. The XML bytes are fixed in the encoded PowerShell command
+ * before UAC; Register-ScheduledTask receives that string directly after elevation.
+ */
+export function runWindowsElevatedScheduledTaskRegistration(
+  taskName: string,
+  xml: string,
+): Promise<number> {
+  const xmlBase64 = Buffer.from(xml, "utf16le").toString("base64");
+  const inner = [
+    `$taskName = ${psSingleQuote(taskName)}`,
+    `$xmlBase64 = ${psSingleQuote(xmlBase64)}`,
+    "$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($xmlBase64))",
+    "Register-ScheduledTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null",
+  ].join("; ");
+  const encodedCommand = Buffer.from(inner, "utf16le").toString("base64");
+  const script = [
+    `$p = Start-Process -FilePath ${psSingleQuote(windowsPowerShell())}`,
+    ` -ArgumentList ${psSingleQuote(buildWindowsElevatedArgumentList([
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-EncodedCommand",
+      encodedCommand,
+    ]))}`,
+    " -Verb RunAs -WindowStyle Hidden -PassThru -Wait",
+    `if ($null -eq $p) { exit ${OCX_ELEVATED_UAC_CANCELLED} }`,
+    "$null = $p.Handle",
+    `if ($null -eq $p.ExitCode) { exit ${OCX_ELEVATED_PROTOCOL_FAILED} }`,
+    "exit $p.ExitCode",
+  ].join("; ");
 
   return startPowerShellCommand(script).completion.then(result => result.exitCode);
 }

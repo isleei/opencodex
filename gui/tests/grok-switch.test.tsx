@@ -105,8 +105,9 @@ function switchFor(id: string): HTMLButtonElement {
 }
 
 function saveApplyButton(): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button.btn-primary"))
-    .find(b => (b.textContent ?? "").length > 0);
+  const bar = container.querySelector(".claude-profile-bar");
+  const btn = bar?.querySelector("button.btn-primary") ?? Array.from(container.querySelectorAll("button.btn-primary"))
+    .find(b => (b.textContent ?? "").includes("Save") || (b.textContent ?? "").includes("Apply"));
   if (!btn) throw new Error("save-apply button not found");
   return btn as unknown as HTMLButtonElement;
 }

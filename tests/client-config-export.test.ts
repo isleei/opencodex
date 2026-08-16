@@ -15,6 +15,7 @@ import {
   isExportClientId,
   normalizeExportModels,
   ompModelsConfigPath,
+  type DshGeneratedConfig,
   type ExportContext,
   type ExportModel,
   type OpencodeGeneratedConfig,
@@ -74,6 +75,10 @@ function opencodeConfig(context: ExportContext = ctx()): OpencodeGeneratedConfig
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
+}
+
+function dshConfig(context: ExportContext = ctx()): DshGeneratedConfig {
+  return buildClientConfig("dsh", context) as DshGeneratedConfig;
 }
 
 
@@ -177,10 +182,56 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(JSON.stringify(piConfig())).not.toContain("cost");
   });
 
-  test("reasoning is omitted — an effort list is not Pi's boolean", () => {
+  test("reasoning is emitted only for rows with a non-empty effort ladder", () => {
+    // The shared fixture carries no ladder anywhere: every entry stays reasoning-free.
     for (const model of piConfig().providers.opencodex!.models) {
       expect(model).not.toHaveProperty("reasoning");
     }
+    const config = piConfig(ctx({
+      models: [
+        { namespaced: "a/reasoning", provider: "a", id: "reasoning", reasoningEfforts: ["low", "high"] },
+        { namespaced: "b/none", provider: "b", id: "none", reasoningEfforts: [] },
+        { namespaced: "c/plain", provider: "c", id: "plain" },
+        { namespaced: "d/off", provider: "d", id: "off", reasoningEfforts: ["none", "minimal", "low"] },
+      ],
+    }));
+    const models = config.providers.opencodex!.models;
+    expect(models.find(model => model.id === "a/reasoning")!.reasoning).toBe(true);
+    // Pi's level scale is constrained to the ladder: members map to themselves, everything
+    // else (incl. minimal, which the Codex ladder has no equivalent for) is hidden.
+    expect(models.find(model => model.id === "a/reasoning")!.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    });
+    // The none sentinel maps pi's off level to "none" (the proxy omits the parameter);
+    // minimal maps to itself.
+    expect(models.find(model => model.id === "d/off")!.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: "minimal",
+      low: "low",
+      medium: null,
+      high: null,
+      xhigh: null,
+      max: null,
+    });
+    // An ultra-only ladder has no exact pi level: pi's max maps to the only declared tier
+    // so the model's sole reasoning level is actually selectable.
+    const ultraOnly = piConfig(ctx({
+      models: [{ namespaced: "e/ultra", provider: "e", id: "ultra", reasoningEfforts: ["ultra"] }],
+    }));
+    expect(ultraOnly.providers.opencodex!.models[0]!.thinkingLevelMap).toMatchObject({
+      max: "ultra",
+      off: null,
+      minimal: null,
+    });
+    // An explicit empty ladder is the catalog's "no reasoning" statement; no boolean.
+    expect(models.find(model => model.id === "b/none")).not.toHaveProperty("reasoning");
+    expect(models.find(model => model.id === "c/plain")).not.toHaveProperty("reasoning");
   });
 
   test("contextWindow and maxTokens are omitted when the context window is unknown", () => {
@@ -309,6 +360,97 @@ describe("OMP serializer", () => {
   });
 });
 
+describe("DSH rc.6 serializer", () => {
+  test("owns only llm-pi-ai.providers.opencodex with a loopback Responses profile", () => {
+    const document = dshConfig();
+    expect(Object.keys(document)).toEqual(["llm-pi-ai"]);
+    expect(Object.keys(document["llm-pi-ai"].providers)).toEqual(["opencodex"]);
+    const provider = document["llm-pi-ai"].providers.opencodex!;
+    expect(provider.displayName).toBe("OpenCodex");
+    expect(provider.api).toBe("openai-responses");
+    expect(provider.baseURL).toBe(BASE_URL);
+    expect(provider.headers).toEqual({ Authorization: "Bearer ocx_data_dsh" });
+    expect(provider).not.toHaveProperty("apiKeyEnv");
+    expect(document).not.toHaveProperty("agent-default-model");
+    expect(document).not.toHaveProperty("deepseek-official");
+  });
+
+  test("exports only representable modalities and authoritative context windows", () => {
+    const document = dshConfig(ctx({
+      models: [
+        { namespaced: "a/unknown", provider: "a", id: "unknown", inputModalities: ["video"] },
+        { namespaced: "a/mixed", provider: "a", id: "mixed", inputModalities: ["audio", "image", "image"] },
+        { namespaced: "a/audio", provider: "a", id: "audio", inputModalities: ["audio"] },
+        { namespaced: "a/context", provider: "a", id: "context", contextWindow: 128_000.9 },
+        { namespaced: "a/fraction", provider: "a", id: "fraction", contextWindow: 0.5 },
+        { namespaced: "a/zero", provider: "a", id: "zero", contextWindow: 0 },
+      ],
+    }));
+    const models = document["llm-pi-ai"].providers.opencodex!.models;
+    expect(models.map(model => model.id)).toEqual(["a/context", "a/fraction", "a/mixed", "a/unknown", "a/zero"]);
+    expect(models.find(model => model.id === "a/unknown")?.input).toEqual(["text"]);
+    expect(models.find(model => model.id === "a/mixed")?.input).toEqual(["image"]);
+    expect(models.find(model => model.id === "a/context")?.contextWindow).toBe(128_000);
+    expect(models.find(model => model.id === "a/fraction")).not.toHaveProperty("contextWindow");
+    expect(models.find(model => model.id === "a/zero")).not.toHaveProperty("contextWindow");
+    for (const model of models) expect(model).not.toHaveProperty("maxTokens");
+  });
+
+  test("maps only authoritative effort levels to DSH level-to-wire entries", () => {
+    const document = dshConfig(ctx({
+      models: [
+        {
+          namespaced: "a/reasoning",
+          provider: "a",
+          id: "reasoning",
+          reasoningEfforts: ["off", "minimal", " LOW ", "medium", "high", "xhigh", "ultra", "unknown", "low"],
+        },
+        { namespaced: "a/ultra", provider: "a", id: "ultra", reasoningEfforts: ["ultra"] },
+        { namespaced: "a/none", provider: "a", id: "none", reasoningEfforts: ["off", "minimal"] },
+      ],
+    }));
+    const models = document["llm-pi-ai"].providers.opencodex!.models;
+    expect(models.find(model => model.id === "a/reasoning")?.reasoningEfforts).toEqual({
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "ultra",
+    });
+    expect(models.find(model => model.id === "a/ultra")?.reasoningEfforts).toEqual({ max: "ultra" });
+    expect(models.find(model => model.id === "a/none")).not.toHaveProperty("reasoningEfforts");
+    expect(JSON.stringify(document)).toContain('"ultra"');
+    expect(JSON.stringify(document)).not.toContain('"minimal"');
+    expect(JSON.stringify(document)).not.toContain('"off"');
+  });
+
+  test("Direct drops native OpenAI and OpenAI-backed combos, failing closed on unknown combos", () => {
+    const models: ExportModel[] = [
+      { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true },
+      { namespaced: "openai/gpt-routed", provider: "openai", id: "gpt-routed" },
+      { namespaced: "safe/model", provider: "safe", id: "model" },
+      { namespaced: "combo/safe", provider: "combo", id: "safe" },
+      { namespaced: "combo/mixed", provider: "combo", id: "mixed" },
+      { namespaced: "combo/unknown", provider: "combo", id: "unknown" },
+    ];
+    const direct = cfg({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+        safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
+      },
+      combos: {
+        safe: { targets: [{ provider: "safe", model: "model" }] },
+        mixed: { targets: [{ provider: "safe", model: "model" }, { provider: "openai", model: "gpt-5.6-luna" }] },
+      },
+    });
+    const ids = dshConfig(ctx({ models, config: direct }))["llm-pi-ai"].providers.opencodex!.models.map(model => model.id);
+    expect(ids).toEqual(["combo/safe", "safe/model"]);
+
+    const pool = cfg({ ...direct, providers: { ...direct.providers, openai: { ...direct.providers.openai!, codexAccountMode: "pool" } } });
+    expect(dshConfig(ctx({ models, config: pool }))["llm-pi-ai"].providers.opencodex!.models).toHaveLength(models.length);
+  });
+});
+
 describe("no credential ever reaches the output (accept criterion 3)", () => {
   const LIVE_KEY = "ocx_live_do_not_serialize_0123456789";
 
@@ -317,7 +459,9 @@ describe("no credential ever reaches the output (accept criterion 3)", () => {
     const context = ctx({ config: withKey });
     for (const client of EXPORT_CLIENT_IDS) {
       const serialized = JSON.stringify(buildClientConfig(client, context));
-      expect(serialized).not.toContain("ocx_");
+      // DSH requires this fixed non-secret loopback bearer. Remove only that
+      // exact placeholder before checking that no credential-shaped value leaked.
+      expect(serialized.replaceAll("ocx_data_dsh", "")).not.toContain("ocx_");
       expect(serialized).not.toContain(LIVE_KEY);
     }
   });
@@ -370,8 +514,8 @@ describe("stable ordering (accept criterion 4)", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the seven file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]);
+  test("covers exactly the nine file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -521,6 +665,7 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.openclaw.filename).toBe("openclaw.json5");
     expect(EXPORT_CLIENTS.kimi.filename).toBe("kimi-config.toml");
     expect(EXPORT_CLIENTS.gajae.filename).toBe("gajae-models.yaml");
+    expect(EXPORT_CLIENTS.mcode.filename).toBe("mcode-config.yaml");
   });
 
   test("the opencode destination reuses the launcher's XDG resolution", () => {

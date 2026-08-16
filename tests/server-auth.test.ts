@@ -36,6 +36,7 @@ import {
 } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
+import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -352,6 +353,132 @@ describe("server local API auth", () => {
     })).toBe(false);
   });
 
+  test("responses handler keeps the request timeout until the body is fully accepted", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const cfg = config();
+    cfg.defaultProvider = "fixture";
+    cfg.providers = {
+      fixture: { ...cfg.providers.openai!, disabled: true },
+    };
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, cfg, {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    controller.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    controller.enqueue(new TextEncoder().encode("}"));
+    controller.close();
+    const response = await responsePromise;
+    expect(accepted).toBe(true);
+    expect(response.status).toBe(404);
+  });
+
+  test("responses handler classifies an aborted pending body as client cancellation", async () => {
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        bodyController = value;
+      },
+    });
+    const abortController = new AbortController();
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: abortController.signal,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, config(), {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      abortSignal: abortController.signal,
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    bodyController.enqueue(new TextEncoder().encode('{"model":"openai/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    abortController.abort();
+    const response = await responsePromise;
+    expect(response.status).toBe(499);
+    expect(accepted).toBe(false);
+  });
+
+  test("responses handler accepts a combo body exactly once across failover children", async () => {
+    const upstreamModels: string[] = [];
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.json() as { model?: string };
+        upstreamModels.push(body.model ?? "missing");
+        return Response.json({ error: { message: "rate limited; try the next combo target" } }, {
+          status: 429,
+          headers: { "retry-after": "1" },
+        });
+      },
+    });
+    const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "first",
+      providers: {
+        first: { adapter: "openai-responses", baseUrl, apiKey: "first-key", allowPrivateNetwork: true },
+        second: { adapter: "openai-responses", baseUrl, apiKey: "second-key", allowPrivateNetwork: true },
+      },
+      combos: {
+        request_timeout: {
+          strategy: "failover",
+          targets: [
+            { provider: "first", model: "first-model" },
+            { provider: "second", model: "second-model" },
+          ],
+        },
+      },
+    };
+    let acceptedCount = 0;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/request_timeout", input: "hello", stream: false }),
+      }), cfg, { model: "unknown", provider: "unknown" }, {
+        onRequestBodyRead: () => {
+          acceptedCount += 1;
+        },
+      });
+
+      expect(response.status).toBe(429);
+      expect(acceptedCount).toBe(1);
+      expect(upstreamModels).toEqual(["first-model", "second-model"]);
+    } finally {
+      await upstream.stop(true);
+    }
+  });
+
   test("loopback hostnames do not require opencodex API auth", () => {
     expect(isLoopbackHostname(undefined)).toBe(true);
     expect(isLoopbackHostname("")).toBe(true);
@@ -393,6 +520,56 @@ describe("server local API auth", () => {
     const allowed = corsHeaders()["Access-Control-Allow-Headers"];
     expect(allowed).toContain("X-OpenCodex-API-Key");
     expect(allowed).toContain("ChatGPT-Account-Id");
+  });
+
+  test("CORS preflight echoes vendor SDK request headers only for an allowed origin (#1773)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    const loopbackOrigin = `http://127.0.0.1:${server.port}`;
+    const stainless = "x-stainless-lang, x-stainless-runtime, x-stainless-retry-count";
+    try {
+      // Every browser-SDK inbound route must answer the same preflight contract; a route that
+      // omits one Stainless header blocks the real request before it is ever sent.
+      for (const path of ["/v1/messages", "/v1/responses", "/v1/chat/completions"]) {
+        const res = await fetch(new URL(path, server.url), {
+          method: "OPTIONS",
+          headers: {
+            origin: loopbackOrigin,
+            "access-control-request-method": "POST",
+            "access-control-request-headers": `content-type, ${stainless}`,
+          },
+        });
+        expect(res.status).toBe(204);
+        const allowed = (res.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+        for (const header of stainless.split(",").map(h => h.trim())) {
+          expect(allowed).toContain(header);
+        }
+        // The static contract survives alongside the echoed headers, and content-type is not
+        // duplicated just because the caller also asked for it.
+        expect(allowed).toContain("x-opencodex-api-key");
+        expect(allowed.split(",").filter(h => h.trim() === "content-type")).toHaveLength(1);
+        expect(res.headers.get("vary")).toContain("Access-Control-Request-Headers");
+      }
+
+      // A rejected origin never reaches the echo: it is refused before any allow-list is built.
+      const rejected = await fetch(new URL("/v1/responses", server.url), {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://attacker.test",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "x-stainless-lang",
+        },
+      });
+      expect(rejected.status).toBe(403);
+      expect((rejected.headers.get("access-control-allow-headers") ?? "").toLowerCase())
+        .not.toContain("x-stainless-lang");
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {

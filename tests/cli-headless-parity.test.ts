@@ -107,6 +107,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],
       ["/api/windows-tray", "ocx tray"],
+      ["/api/cloud-sync", "ocx sync-cloud"],
+      ["/api/clients", "ocx clients"],
+      ["/api/pi", "ocx pi"],
     ];
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);
@@ -247,7 +250,7 @@ describe("headless GUI parity CLI", () => {
       "set", "fast", "--targets", "ark/model-a:2,openai/gpt-5.5", "--strategy", "failover", "--json",
     ], runtime.deps);
     expect(code).toBe(0);
-    expect(runtime.requests[0]?.body).toEqual({
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toEqual({
       id: "fast",
       combo: {
         strategy: "failover",
@@ -271,7 +274,7 @@ describe("headless GUI parity CLI", () => {
       "--json",
     ], runtime.deps);
     expect(code).toBe(0);
-    expect(runtime.requests[0]?.body).toMatchObject({
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toMatchObject({
       id: "nova-sol",
       combo: {
         alias: "gpt-5.6-sol",
@@ -280,6 +283,35 @@ describe("headless GUI parity CLI", () => {
         targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
       },
     });
+  });
+
+  test("combo set round-trips an existing disabled image-input capability", async () => {
+    let persisted: Record<string, unknown> = {
+      id: "text-only",
+      imageInput: "disabled",
+      targets: [{ provider: "ark", model: "old-model" }],
+    };
+    const runtime = fakeRuntime((req, body) => {
+      if (req.method === "GET") return { combos: [persisted] };
+      if (req.method === "PUT") {
+        const update = body as { id: string; combo: Record<string, unknown> };
+        persisted = { id: update.id, ...update.combo };
+        return { combo: persisted };
+      }
+      return undefined;
+    });
+
+    expect(await handleComboCommand([
+      "set", "text-only", "--targets", "ark/new-model", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(await handleComboCommand(["show", "text-only", "--json"], runtime.deps)).toBe(0);
+
+    expect(persisted).toMatchObject({
+      id: "text-only",
+      imageInput: "disabled",
+      targets: [{ provider: "ark", model: "new-model" }],
+    });
+    expect(runtime.requests.map(request => request.method)).toEqual(["GET", "PUT", "GET"]);
   });
 
   test("agent effort and roster use the same live mutation routes as GUI", async () => {

@@ -13,11 +13,7 @@ export type Page =
   | "storage"
   | "cloud"
   | "codex-auth"
-  | "api"
   | "clients"
-  | "claude"
-  | "grok"
-  | "pi"
   | "integrations";
 
 export const VALID_PAGES = new Set<Page>([
@@ -31,11 +27,7 @@ export const VALID_PAGES = new Set<Page>([
   "storage",
   "cloud",
   "codex-auth",
-  "api",
   "clients",
-  "claude",
-  "grok",
-  "pi",
   "integrations",
 ]);
 
@@ -101,6 +93,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/openclaw",
   "integrations/kimi",
   "integrations/gajae",
+  "integrations/dsh",
 ] as const;
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {

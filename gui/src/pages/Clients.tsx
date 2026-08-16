@@ -112,14 +112,15 @@ export default function Clients({ apiBase }: { apiBase: string }) {
     });
   };
 
+  const generatedAt = status?.generatedAt;
   const generatedLabel = useMemo(() => {
-    if (!status?.generatedAt) return null;
+    if (!generatedAt) return null;
     try {
-      return new Date(status.generatedAt).toLocaleString();
+      return new Date(generatedAt).toLocaleString();
     } catch {
       return null;
     }
-  }, [status?.generatedAt]);
+  }, [generatedAt]);
 
   const errorText = state.error instanceof Error
     ? state.error.message

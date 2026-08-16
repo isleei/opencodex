@@ -8,6 +8,7 @@ import type {
   OcxContentPart,
   OcxParsedRequest,
   OcxProviderConfig,
+  OcxProviderOpaqueToolCallMetadata,
   OcxTextContent,
   OcxToolCall,
   OcxUsage,
@@ -44,6 +45,25 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- Prefer taking the next tool action over explaining; keep calling tools until the task is complete.",
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
 ].join("\n");
+
+/**
+ * Google renamed the current Gemini Flash generations on the Generative Language API,
+ * appending a `-tiered` suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). The
+ * old `gemini-3.7-flash` path 404s, so a saved config or registry entry naming the base
+ * id must be resolved here before it reaches the URL. The user-facing id is deliberately
+ * left alone: the picker, the catalog, the usage log and the price overlays all stay
+ * keyed on the base id, and only the wire path learns the new spelling.
+ */
+const GEMINI_DIRECT_WIRE_RENAMES: Record<string, string> = {
+  "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+  "gemini-3.6-flash": "gemini-3.6-flash-tiered",
+};
+
+function resolveDirectGeminiWireModelId(modelId: string): string {
+  return Object.hasOwn(GEMINI_DIRECT_WIRE_RENAMES, modelId)
+    ? GEMINI_DIRECT_WIRE_RENAMES[modelId]!
+    : modelId;
+}
 
 /** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
 function resolveVertexApiKey(optKey?: string): string | undefined {
@@ -190,7 +210,10 @@ function messagesToGeminiFormat(
             // conversion 400s. Gemini accepts the optional id and pairs call/response by it.
             if (callId !== undefined) functionCall.id = callId;
             const part: Record<string, unknown> = { functionCall };
-            if (isLikelyRealThoughtSignature(tc.thoughtSignature)) part.thoughtSignature = tc.thoughtSignature;
+            // Prefer the metadata that travelled with this exact call; fall back to the legacy
+            // field for callers that have not been migrated. Never merge or synthesize.
+            const signature = tc.providerMetadata?.google?.thoughtSignature ?? tc.thoughtSignature;
+            if (isLikelyRealThoughtSignature(signature)) part.thoughtSignature = signature;
             parts.push(part);
           }
         }
@@ -307,7 +330,21 @@ function artifactMarkdownUrl(filePath: string): string {
 interface GoogleResponsePart {
   text?: string;
   thought?: boolean;
+  thoughtSignature?: string;
   functionCall?: { name: string; args: unknown };
+}
+
+/**
+ * Carry a Gemini thought signature with the exact function-call part that produced it. Google
+ * validates the signature against that specific part, so it must ride the individual tool call
+ * rather than be re-matched by name/arguments later (issue #1735).
+ */
+function googleToolCallMetadataFromPart(
+  part: GoogleResponsePart,
+): { providerMetadata: OcxProviderOpaqueToolCallMetadata } | undefined {
+  const signature = part.thoughtSignature;
+  if (!isLikelyRealThoughtSignature(signature)) return undefined;
+  return { providerMetadata: { google: { thoughtSignature: signature } } };
 }
 
 /**
@@ -353,7 +390,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             parsed.modelId,
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
           ).wireModelId
-        : parsed.modelId;
+        : resolveDirectGeminiWireModelId(parsed.modelId);
       const { systemInstruction, contents } = messagesToGeminiFormat(parsed, routedModelId);
       const tools = toolsToGeminiFormat(parsed);
 
@@ -450,7 +487,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const envelope = {
           model: wireModelId,
           // The envelope's `userAgent` field is a protocol constant ("antigravity"), distinct from
-          // the HTTP `User-Agent` header (the real CLI UA). CLIProxyAPI `geminiToAntigravity` hardcodes
+          // the HTTP `User-Agent` header (the real IDE UA). CLIProxyAPI `geminiToAntigravity` hardcodes
           // the body field; only the header carries the versioned client string.
           userAgent: "antigravity",
           requestType: "agent",
@@ -501,7 +538,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${parsed.modelId}:${method}${streamParam}`;
+      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
@@ -655,7 +692,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
               emittedContentEvent = true;
-              yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
+              yield {
+                type: "tool_call_start",
+                id,
+                name: restoreGoogleToolName(part.functionCall.name),
+                ...googleToolCallMetadataFromPart(part),
+              };
               yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
               yield { type: "tool_call_end" };
             }
@@ -871,7 +913,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
-            events.push({ type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) });
+            events.push({
+              type: "tool_call_start",
+              id,
+              name: restoreGoogleToolName(part.functionCall.name),
+              ...googleToolCallMetadataFromPart(part),
+            });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });
           }

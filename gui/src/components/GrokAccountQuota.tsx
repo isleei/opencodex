@@ -97,8 +97,36 @@ export default function GrokAccountQuota({ apiBase }: { apiBase: string }) {
   }, [apiBase, t]);
 
   useEffect(() => {
-    void loadAccounts();
-  }, [loadAccounts]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${PROVIDER}`);
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json() as { activeAccountId?: string | null; accounts?: GrokOAuthAccount[] };
+        if (cancelled || !aliveRef.current) return;
+        setActiveAccountId(data.activeAccountId ?? null);
+        setAccounts(data.accounts ?? []);
+        setLoading(false);
+
+        const qRes = await fetch(`${apiBase}/api/oauth/accounts?provider=${PROVIDER}&quota=1`);
+        if (cancelled || !aliveRef.current) return;
+        if (qRes.ok) {
+          const qData = await qRes.json() as { activeAccountId?: string | null; accounts?: GrokOAuthAccount[] };
+          setActiveAccountId(qData.activeAccountId ?? data.activeAccountId ?? null);
+          setAccounts(qData.accounts ?? data.accounts ?? []);
+        }
+      } catch (err) {
+        if (cancelled || !aliveRef.current) return;
+        setError(err instanceof Error ? err.message : t("grok.account.loadFail"));
+      } finally {
+        if (!cancelled && aliveRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiBase, t]);
 
   const login = async (addAccount = false, accountId?: string) => {
     const gen = ++loginGenRef.current;

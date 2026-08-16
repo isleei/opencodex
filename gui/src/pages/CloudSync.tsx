@@ -72,7 +72,25 @@ export default function CloudSync({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase, clientIdInput]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/cloud-sync/status`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as CloudStatus;
+        if (cancelled) return;
+        setStatus(data);
+        if (data.clientId && !clientIdInput) setClientIdInput(data.clientId);
+        setIncludeUsage(data.includeUsage);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiBase, clientIdInput]);
 
   useEffect(() => () => {
     if (pollRef.current !== null) window.clearInterval(pollRef.current);
