@@ -9,7 +9,7 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve, win32 } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
@@ -113,12 +113,19 @@ function currentCodexSqliteHomeAbsolute(target: "native" | "windows" = "native")
   const raw = process.env.CODEX_SQLITE_HOME?.trim();
   if (!raw) return undefined;
   const expanded = expandUserPath(raw);
-  // Windows service artifacts can be rendered by cross-platform tests and
-  // repair tooling. Preserve an already-absolute drive/UNC path instead of
-  // anchoring it beneath the current POSIX worktree.
-  return target === "windows" && win32.isAbsolute(expanded)
-    ? win32.normalize(expanded)
-    : resolve(expanded);
+  // Service artifacts can be rendered by cross-platform tests and repair tooling, so an
+  // already-absolute path for the TARGET platform is preserved rather than re-anchored
+  // against the writing host. `resolve()` is host-relative in both directions: on a POSIX
+  // host it turns `C:\data` into `<cwd>/C:\data`, and on a Windows host it turns `/tmp/x`
+  // into `D:\tmp\x` — neither is a path the target can use. A relative value still resolves,
+  // because a service unit has no meaningful working directory.
+  //
+  // CODEX_HOME and OPENCODEX_HOME are carried through literally, so without this the same
+  // generated file disagreed with itself about two variables holding the same kind of value.
+  if (target === "windows") {
+    return win32.isAbsolute(expanded) ? win32.normalize(expanded) : resolve(expanded);
+  }
+  return posix.isAbsolute(expanded) ? posix.normalize(expanded) : resolve(expanded);
 }
 
 function currentOpenCodexHome(): string {
@@ -1538,6 +1545,14 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
+    'if not exist "%OCX_BUN%" (',
+    '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: bundled Bun is missing; reinstall opencodex, then run ocx service repair',
+    "  exit /b 3",
+    ")",
+    'if not exist "%OCX_CLI%" (',
+    '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: CLI entry is missing; reinstall opencodex, then run ocx service repair',
+    "  exit /b 3",
+    ")",
     `"%OCX_BUN%" "%OCX_CLI%" start --port ${port} >>"%OCX_SERVICE_LOG%" 2>&1`,
     "if %ERRORLEVEL% NEQ 0 (",
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',

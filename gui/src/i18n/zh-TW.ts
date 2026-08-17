@@ -1,6 +1,8 @@
 import type { TKey } from "./en";
 
-/** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
+/**
+ * Traditional Chinese (Taiwan) i18n catalog. Must match the `TKey` set.
+ */
 export const zhTW: Record<TKey, string> = {
   "nav.dashboard": "儀表板",
   "uptime.day": "天",
@@ -2234,5 +2236,5 @@ export const zhTW: Record<TKey, string> = {
   "lab.verdict.UNSUPPORTED": "不支援",
   "lab.layer.protocol_conformance": "協定符合度",
   "lab.layer.live_route_compatibility": "即時路由相容性",
-  "lab.layer.task_effectiveness": "任務效能"
+  "lab.layer.task_effectiveness": "任務效能",
 };

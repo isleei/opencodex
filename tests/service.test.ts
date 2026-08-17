@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, posix, win32 } from "node:path";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
@@ -523,6 +523,30 @@ describe("Windows service task", () => {
     expect(script).not.toContain("timeout /t");
   });
 
+  test("stops instead of restart-looping when an update removed the baked runtime or CLI (#1849)", () => {
+    const script = buildWindowsServiceScript({
+      bun: "C:\\OpenCodex\\bun.exe",
+      bunRuntimeSource: "bundled",
+      cli: "C:\\OpenCodex\\cli.ts",
+    });
+    const loopAt = script.indexOf(":loop");
+    const bunCheckAt = script.indexOf('if not exist "%OCX_BUN%"');
+    const cliCheckAt = script.indexOf('if not exist "%OCX_CLI%"');
+    const launchAt = script.indexOf('"%OCX_BUN%" "%OCX_CLI%" start --port');
+    const retryAt = script.indexOf("goto loop");
+
+    expect(loopAt).toBeGreaterThanOrEqual(0);
+    expect(bunCheckAt).toBeGreaterThan(loopAt);
+    expect(cliCheckAt).toBeGreaterThan(bunCheckAt);
+    expect(launchAt).toBeGreaterThan(cliCheckAt);
+    expect(retryAt).toBeGreaterThan(launchAt);
+    expect(script).toContain("installation is incomplete: bundled Bun is missing");
+    expect(script).toContain("installation is incomplete: CLI entry is missing");
+    expect(script.match(/exit \/b 3/g)).toHaveLength(2);
+    // `goto loop` re-enters both checks before another child spawn.
+    expect(script.slice(loopAt, launchAt).match(/if not exist/g)).toHaveLength(2);
+  });
+
   test("rewrites profile-relative paths to env indirection so non-ASCII usernames survive OEM-codepage batch parsing", () => {
     const oldUserProfile = process.env.USERPROFILE;
     const oldAppData = process.env.APPDATA;
@@ -661,6 +685,61 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
+    }
+  });
+
+  // A POSIX unit must carry the literal POSIX path no matter which host writes it. The two
+  // cases above are where this actually bites: on a Windows host `resolve("/tmp/x")` anchors
+  // to the current drive and the generated file said `D:\tmp\codex-sqlite-home`, while
+  // CODEX_HOME beside it kept `/tmp/codex-home`. The same file disagreed with itself about two
+  // variables holding the same kind of value. This states the rule directly so the intent
+  // survives; on a POSIX host `resolve()` is identity here, so only Windows can catch it.
+  test("carries an absolute POSIX sqlite home into POSIX units without host anchoring", () => {
+    const inherited = process.env.CODEX_SQLITE_HOME;
+    try {
+      process.env.CODEX_SQLITE_HOME = "/var/lib/opencodex/codex-sqlite";
+
+      expect(buildPlist()).toContain(
+        "<key>CODEX_SQLITE_HOME</key><string>/var/lib/opencodex/codex-sqlite</string>",
+      );
+      expect(buildUnit()).toContain(
+        'Environment="CODEX_SQLITE_HOME=/var/lib/opencodex/codex-sqlite"',
+      );
+    } finally {
+      if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = inherited;
+    }
+  });
+
+  // The relative case is why the resolve() is there at all: a service unit has no meaningful
+  // working directory, so a relative home must still be made absolute.
+  test("still absolutizes a relative sqlite home", () => {
+    const inherited = process.env.CODEX_SQLITE_HOME;
+    try {
+      process.env.CODEX_SQLITE_HOME = "relative-sqlite-home";
+      const plist = buildPlist();
+
+      // Assert the emitted value is actually absolute. Rejecting only the raw string would
+      // stay green for any other non-absolute transform, which is the whole thing this test
+      // exists to catch. The two artifact formats differ, so each is extracted on its own
+      // terms: launchd is XML, systemd is a quoted Environment= line.
+      const plistValue = /<key>CODEX_SQLITE_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+      expect(plistValue).toBeDefined();
+      expect(
+        isAbsolute(plistValue!) || posix.isAbsolute(plistValue!) || win32.isAbsolute(plistValue!),
+      ).toBe(true);
+      expect(plistValue!.endsWith("relative-sqlite-home")).toBe(true);
+
+      const unit = buildUnit();
+      const unitValue = /Environment="CODEX_SQLITE_HOME=([^"]*)"/.exec(unit)?.[1];
+      expect(unitValue).toBeDefined();
+      expect(
+        isAbsolute(unitValue!) || posix.isAbsolute(unitValue!) || win32.isAbsolute(unitValue!),
+      ).toBe(true);
+      expect(unitValue!.endsWith("relative-sqlite-home")).toBe(true);
+    } finally {
+      if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = inherited;
     }
   });
 });
