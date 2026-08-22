@@ -737,7 +737,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.estimate.cache_detail_missing": "缺少快取明細；輸入費用按上限估算。",
   "logs.detail.estimate.expected_price_overlay": "使用了已驗證的 Expected 標價。",
   "logs.detail.estimate.provider_cost_overlay": "已使用供應商設定的價格覆蓋。",
-  "logs.detail.estimate.priority_lower_bound": "暫無已確認的 OpenRouter Priority 價格；目前顯示的標準價估算是已知下界。",
+  "logs.detail.estimate.priority_lower_bound": "暫無已確認的 Priority 價格；目前顯示的估算是已知下界。",
   "logs.col.error": "錯誤",
   "logs.col.upstreamReason": "上游原因",
   "logs.col.duration": "耗時",
