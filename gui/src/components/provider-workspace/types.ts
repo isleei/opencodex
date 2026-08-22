@@ -104,4 +104,12 @@ export type ProviderUpdatePatch = {
   requestPacing?: WorkspaceItem["requestPacing"] | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */
   codexAccountMode?: "direct" | "pool";
+  /** Management-only write that atomically owns the two supported xAI Grok adapter rows. */
+  xaiResponsesOptIn?: boolean;
+};
+
+export type ProviderUpdateResult = {
+  ok: boolean;
+  error?: string;
+  xaiResponsesOptInState?: WorkspaceItem["xaiResponsesOptInState"];
 };
