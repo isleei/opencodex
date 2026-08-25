@@ -128,3 +128,5 @@ export function detectClaudeCodeToken(): OAuthCredentials | null {
   if (!raw) return null;
   return parseClaudeOauthPayload(raw);
 }
+
+export { detectLocalClineToken as detectClineToken } from "./cline";

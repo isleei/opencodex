@@ -15,24 +15,26 @@ function minimalRequest(model: string): OcxParsedRequest {
 
 describe("cline provider", () => {
   const entry = PROVIDER_REGISTRY.find(e => e.id === "cline");
+  const apiKeyEntry = PROVIDER_REGISTRY.find(e => e.id === "cline-apikey");
 
-  test("registry entry exists with correct shape", () => {
+  test("registry entry exists with correct OAuth shape", () => {
     expect(entry).toBeDefined();
     expect(entry?.adapter).toBe("openai-chat");
     expect(entry?.baseUrl).toBe("https://api.cline.bot/api/v1");
-    expect(entry?.authKind).toBe("key");
+    expect(entry?.authKind).toBe("oauth");
+    expect(entry?.oauthId).toBe("cline");
     expect(entry?.dashboardUrl).toBe("https://app.cline.bot");
     expect(entry?.liveModels).toBe(true);
     expect(entry?.preserveCustomDestination).toBe(true);
     expect(entry?.defaultModel).toBe("anthropic/claude-sonnet-4-6");
     expect(entry?.models).toContain("anthropic/claude-sonnet-4-6");
     expect(entry?.models).toContain("minimax/minimax-m2.5");
-    expect(entry?.note).toMatch(/usage-billing/i);
+    expect(entry?.models).toContain("stealth/ox-alpha");
   });
 
-  test("is included in the key-login map", () => {
+  test("cline-apikey is included in the key-login map", () => {
     const keyMap = deriveKeyLoginMap();
-    expect(keyMap.cline).toMatchObject({
+    expect(keyMap["cline-apikey"]).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.cline.bot/api/v1",
       dashboardUrl: "https://app.cline.bot",
@@ -41,7 +43,7 @@ describe("cline provider", () => {
 
   test("appears in the GUI preset picker", () => {
     const presets = deriveProviderPresets();
-    const preset = presets.find((p: { id: string }) => p.id === "cline");
+    const preset = presets.find((p: { id: string }) => p.id === "cline" || p.id === "cline-apikey");
     expect(preset).toBeDefined();
     expect(preset?.baseUrl).toBe("https://api.cline.bot/api/v1");
     expect(preset?.defaultModel).toBe("anthropic/claude-sonnet-4-6");
@@ -50,7 +52,7 @@ describe("cline provider", () => {
 
   test("adapter targets the Cline chat completions endpoint with bearer auth", () => {
     const provider: OcxProviderConfig = {
-      ...providerConfigSeed(entry!),
+      ...providerConfigSeed(apiKeyEntry!),
       apiKey: "ck-test",
     };
     const req = createOpenAIChatAdapter(provider).buildRequest(minimalRequest("anthropic/claude-sonnet-4-6"));

@@ -14,6 +14,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { loginCline, refreshClineToken } from "./cline";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
@@ -236,6 +237,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("github-copilot"),
     // Unofficial Copilot bridge — keep proactive traffic lazy-only (no background guardian spam).
     defaultRefreshPolicy: "lazy-only",
+  },
+  cline: {
+    login: (ctrl, opts) => loginCline(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", forceLogin: opts?.forceLogin }),
+    refresh: refreshClineToken,
+    providerConfig: oauthConfig("cline"),
+    defaultModel: oauthDefaultModel("cline"),
   },
   chatgpt: {
     login: loginChatGPT,
@@ -467,7 +474,7 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
 }
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
-const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro"]);
+const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro", "cline"]);
 
 export async function forceRefreshOAuthAccessSnapshot(
   rejected: OAuthAccessSnapshot,
