@@ -8,7 +8,7 @@
  * with EXPORT_CLIENT_IDS by hand; adding a client server-side renders no row
  * until this tuple changes.
  */
-export const CLIENTS = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime"] as const;
+export const CLIENTS = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "cline"] as const;
 export type ExportClientId = (typeof CLIENTS)[number];
 
 export const CLIENT_LABEL_KEYS = {
@@ -23,6 +23,7 @@ export const CLIENT_LABEL_KEYS = {
   mcode: "api.clientConfig.clientMcode",
   zcode: "api.clientConfig.clientZcode",
   prime: "api.clientConfig.clientPrime",
+  cline: "api.clientConfig.clientCline",
 } as const;
 
 /**
@@ -38,6 +39,7 @@ export const CLIENT_LABEL_KEYS = {
 export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   opencode: "/provider-icons/opencode.svg",
   pi: "/provider-icons/pi.svg",
+  cline: "/provider-icons/cline-color.svg",
 };
 
 /** The `/api/client-config` 200 envelope, read off the route rather than a design doc. */

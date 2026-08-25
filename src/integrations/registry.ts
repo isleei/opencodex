@@ -12,6 +12,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
+  clineConfigPath,
+  clineHomeDir,
   dshConfigPath,
   dshHomeDir,
   gajaeConfigPath,
@@ -148,6 +150,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     // that directory directly, so there is no parent to test when the override
     // is set. Same choice as OMP, whose detect signal is `ompAgentDir`.
     detectDir: (env = process.env, home = homedir()) => primeAgentDir(env, home),
+  },
+  cline: {
+    id: "cline",
+    configPath: (env = process.env, home = homedir()) => clineConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => clineHomeDir(env, home),
   },
 };
 

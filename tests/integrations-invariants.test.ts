@@ -66,9 +66,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same eleven ids", async () => {
+  test("every list of clients holds exactly the same twelve ids", async () => {
     /*
-     * Five lists name the same eleven clients, and two of them are maintained by
+     * Five lists name the same twelve clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the
@@ -79,7 +79,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(11);
+    expect(expected).toHaveLength(12);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -156,6 +156,7 @@ describe("every client survives a full lifecycle", () => {
     zcode: '{\n  "provider": {\n    "builtin:zai-start-plan": { "name": "Keep Me", "kind": "anthropic" }\n  }\n}\n',
     // Prime reads Pi's models.json contract, so it seeds the same shape.
     prime: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
+    cline: '{\n  "version": 1,\n  "providers": {\n    "mine": { "settings": { "provider": "custom" } }\n  }\n}\n',
   };
 
   for (const clientId of INTEGRATION_CLIENT_IDS) {

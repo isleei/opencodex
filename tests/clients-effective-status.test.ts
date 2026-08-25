@@ -215,7 +215,7 @@ describe("GET /api/clients/status", () => {
     expect(body.proxy.port).toBe(10100);
     expect(Array.isArray(body.clients)).toBe(true);
     expect(body.clients.map(c => c.id).sort()).toEqual(
-      ["agy", "claude", "codex", "grok", "opencode", "pi"].sort(),
+      ["agy", "claude", "cline", "codex", "grok", "opencode", "pi"].sort(),
     );
     const blob = JSON.stringify(body);
     expect(blob).not.toContain("ocx_live_secret");
@@ -277,6 +277,14 @@ describe("readClientsEffectiveStatus aggregator", () => {
             notes: ["agy binary not on PATH"],
             binary: null,
           }),
+          cline: () => ({
+            present: true,
+            baseUrl: "http://127.0.0.1:10100/v1",
+            model: "opencode-free/deepseek-v4-flash-free",
+            configPaths: ["/tmp/cline/providers.json"],
+            notes: [],
+            binary: "/usr/local/bin/cline",
+          }),
           ccSwitch: () => [{ appType: "claude", name: "anyroute-MEI", id: "p1" }],
           paseo: () => [{ provider: "pi", command: ["ocx-pi"] }],
         },
@@ -285,7 +293,7 @@ describe("readClientsEffectiveStatus aggregator", () => {
 
     expect(snapshot.proxy.running).toBe(true);
     expect(snapshot.proxy.port).toBe(10100);
-    expect(snapshot.clients).toHaveLength(6);
+    expect(snapshot.clients).toHaveLength(7);
 
     const byId = Object.fromEntries(snapshot.clients.map(c => [c.id, c]));
     expect(byId.claude?.verdict).toBe("direct");

@@ -62,7 +62,7 @@ describe("no secret reaches a client config", () => {
     // Prime can carry provider headers, but remote credential wiring is
     // deliberately deferred from those initial generated integrations.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "cline"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {

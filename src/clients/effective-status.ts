@@ -18,10 +18,11 @@ import { probePi } from "./probes/pi";
 import { probeGrok } from "./probes/grok";
 import { probeOpencode } from "./probes/opencode";
 import { probeAgy } from "./probes/agy";
+import { probeCline } from "./probes/cline";
 import { readCcSwitchCurrentProfiles, type CcSwitchProfile } from "./probes/cc-switch";
 import { readPaseoProviderCommands, type PaseoProviderCommand } from "./probes/paseo";
 
-export type ClientId = "claude" | "codex" | "pi" | "grok" | "opencode" | "agy";
+export type ClientId = "claude" | "codex" | "pi" | "grok" | "opencode" | "agy" | "cline";
 
 export type ClientVerdict = "ocx" | "direct" | "mixed" | "missing" | "unknown";
 
@@ -70,6 +71,7 @@ export interface EffectiveStatusOpts {
     grok?: typeof probeGrok;
     opencode?: typeof probeOpencode;
     agy?: typeof probeAgy;
+    cline?: typeof probeCline;
     ccSwitch?: typeof readCcSwitchCurrentProfiles;
     paseo?: typeof readPaseoProviderCommands;
   };
@@ -82,6 +84,7 @@ const CLIENT_LABELS: Record<ClientId, string> = {
   grok: "Grok Build",
   opencode: "OpenCode",
   agy: "Antigravity (agy)",
+  cline: "Cline",
 };
 
 /** Map client id → CC Switch `app_type` column (when present). */
@@ -90,6 +93,7 @@ const CC_SWITCH_APP: Partial<Record<ClientId, string>> = {
   codex: "codex",
   grok: "grokbuild",
   opencode: "opencode",
+  cline: "cline",
 };
 
 /** Map client id → Paseo `agents.providers` key. */
@@ -99,6 +103,7 @@ const PASEO_PROVIDER: Partial<Record<ClientId, string>> = {
   agy: "antigravity-acp",
   claude: "claude",
   codex: "codex",
+  cline: "cline",
 };
 
 export interface ProxyTarget {
@@ -220,13 +225,14 @@ export async function readClientsEffectiveStatus(
   const grokFn = opts.probes?.grok ?? probeGrok;
   const opencodeFn = opts.probes?.opencode ?? probeOpencode;
   const agyFn = opts.probes?.agy ?? probeAgy;
+  const clineFn = opts.probes?.cline ?? probeCline;
   const ccSwitchFn = opts.probes?.ccSwitch ?? readCcSwitchCurrentProfiles;
   const paseoFn = opts.probes?.paseo ?? readPaseoProviderCommands;
 
   const emptyProfiles: CcSwitchProfile[] = [];
   const emptyPaseo: PaseoProviderCommand[] = [];
 
-  const [ccProfiles, paseoCommands, claude, codex, pi, grok, opencode, agy] = await Promise.all([
+  const [ccProfiles, paseoCommands, claude, codex, pi, grok, opencode, agy, cline] = await Promise.all([
     safeProbeAsync("cc-switch", () => Promise.resolve(ccSwitchFn({ home })), emptyProfiles),
     safeProbeAsync("paseo", () => Promise.resolve(paseoFn({ home })), emptyPaseo),
     safeProbeAsync("claude", () => Promise.resolve(claudeFn({ home })), {
@@ -245,6 +251,9 @@ export async function readClientsEffectiveStatus(
       present: false, baseUrl: null, model: null, configPaths: [] as string[], notes: ["probe failed"],
     }),
     safeProbeAsync("agy", () => Promise.resolve(agyFn({ home })), {
+      present: false, baseUrl: null, model: null, configPaths: [] as string[], notes: ["probe failed"], binary: null,
+    }),
+    safeProbeAsync("cline", () => Promise.resolve(clineFn({ home })), {
       present: false, baseUrl: null, model: null, configPaths: [] as string[], notes: ["probe failed"], binary: null,
     }),
   ]);
@@ -368,6 +377,25 @@ export async function readClientsEffectiveStatus(
       configPaths: raw.configPaths,
       launcher: paseoLauncher("agy", paseoCommands) ?? (raw.binary ? raw.binary : null),
       switcher: null,
+      notes: raw.notes,
+    });
+  }
+
+  // Cline
+  {
+    const raw = cline;
+    const { verdict, viaOcx } = verdictFromBaseUrl(raw.baseUrl, proxy, { present: raw.present });
+    clients.push({
+      id: "cline",
+      label: CLIENT_LABELS.cline,
+      present: raw.present,
+      viaOcx,
+      verdict: raw.present ? (raw.baseUrl ? verdict : "unknown") : "missing",
+      baseUrl: raw.baseUrl,
+      model: raw.model,
+      configPaths: raw.configPaths,
+      launcher: paseoLauncher("cline", paseoCommands) ?? (raw.binary ? "cline" : null),
+      switcher: switcherFor("cline", ccProfiles),
       notes: raw.notes,
     });
   }

@@ -484,6 +484,29 @@ export function primeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(primeAgentDir(env, home), "models.json");
 }
 
+export function clineHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.CLINE_DATA_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "CLINE_DATA_DIR");
+
+  const vscodeDir = process.platform === "darwin"
+    ? join(home, "Library", "Application Support", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings")
+    : process.platform === "win32"
+      ? join(env.APPDATA || join(home, "AppData", "Roaming"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings")
+      : join(home, ".config", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings");
+
+  if (existsSync(vscodeDir)) return vscodeDir;
+
+  const cliSettingsDir = join(home, ".cline", "data", "settings");
+  if (existsSync(cliSettingsDir) || existsSync(join(home, ".cline"))) return cliSettingsDir;
+
+  return vscodeDir;
+}
+
+/** Cline's canonical providers configuration file. */
+export function clineConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(clineHomeDir(env, home), "providers.json");
+}
+
 /**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
@@ -526,7 +549,8 @@ export type ExportClientId =
   | "dsh"
   | "mcode"
   | "zcode"
-  | "prime";
+  | "prime"
+  | "cline";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -725,10 +749,10 @@ export function buildOpencodeProviderBlockFromCatalog(
  * models produce identical bytes. Stability matters because the GUI shows a diffable
  * preview and agents may checksum the payload.
  */
-export function normalizeExportModels(models: readonly ExportModel[]): ExportModel[] {
+export function normalizeExportModels(models: readonly ExportModel[] = []): ExportModel[] {
   const seen = new Set<string>();
   const unique: ExportModel[] = [];
-  for (const model of models) {
+  for (const model of models ?? []) {
     if (seen.has(model.namespaced)) continue;
     seen.add(model.namespaced);
     unique.push(model);
@@ -1379,6 +1403,42 @@ function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
   };
 }
 
+export interface ClineProviderSettings {
+  provider: string;
+  baseUrl: string;
+  apiKey?: string;
+  model?: string;
+}
+
+export interface ClineProviderBlock {
+  settings: ClineProviderSettings;
+  tokenSource?: string;
+}
+
+export interface ClineGeneratedConfig {
+  version: number;
+  providers: Record<string, ClineProviderBlock>;
+}
+
+function buildClineClientConfig(ctx: ExportContext): ClineGeneratedConfig {
+  const models = normalizeExportModels(ctx.models);
+  const defaultModel = models[0]?.namespaced ?? "opencodex";
+  return {
+    version: 1,
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        settings: {
+          provider: "openai-compatible",
+          baseUrl: ctx.baseUrl.replace(/\/v1\/?$/, "") + "/v1",
+          apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+          model: defaultModel,
+        },
+        tokenSource: "manual",
+      },
+    },
+  };
+}
+
 /**
  * Per-client model counts, read back off the SERIALIZED document rather than
  * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
@@ -1388,6 +1448,11 @@ function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
 function summarizeOpencode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = Object.values((document as OpencodeGeneratedConfig | undefined)?.provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => !model.limit).length };
+}
+
+function summarizeCline(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const provider = (document as ClineGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID];
+  return { modelCount: provider ? 1 : 0, modelsWithoutLimits: 0 };
 }
 
 function summarizePi(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
@@ -1520,6 +1585,11 @@ function buildZcodeContribution(ctx: ExportContext): ManagedContribution {
 function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildPiClientConfig(ctx);
   return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildClineContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildClineClientConfig(ctx);
+  return singleFragment("cline", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
@@ -1673,6 +1743,18 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // Prime's provider block does accept `headers`, so a dedicated admission
     // header has somewhere to live, but remote credential wiring is deferred
     // from this initial loopback-only integration — same stance as OMP's.
+    loopbackOnly: true,
+  },
+  cline: {
+    id: "cline",
+    filename: "providers.json",
+    destination: env => clineConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Cline reads a non-secret placeholder from providers.json; loopback needs no key.",
+    build: buildClineClientConfig,
+    format: "json",
+    summarize: summarizeCline,
+    buildContribution: buildClineContribution,
     loopbackOnly: true,
   },
 };
