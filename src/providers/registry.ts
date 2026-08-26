@@ -1534,7 +1534,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "minimax/minimax-m2.5",
       "stealth/ox-alpha",
     ],
-    preserveCustomDestination: true,
     note: "Log in with your Cline account (imports an existing local Cline CLI / VS Code credential when present).",
   },
   {

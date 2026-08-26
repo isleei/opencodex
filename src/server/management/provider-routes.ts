@@ -36,7 +36,7 @@ import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost,
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets, enrichProviderFromRegistry } from "../../providers/derive";
+import { deriveProviderPresets, enrichProviderFromRegistry, providerConfigSeed } from "../../providers/derive";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
@@ -59,6 +59,7 @@ import {
   getProviderLiveModelCount,
 } from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
+import { modelAutoCompactTokenLimitsConfigError } from "../../providers/auto-compact-budget";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
@@ -271,6 +272,29 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelAutoCompactTokenLimits")) {
+    const value = rawBody.modelAutoCompactTokenLimits;
+    const error = modelAutoCompactTokenLimitsConfigError(value, {
+      allowTombstones: true,
+      requireNativeIds: name === "openai",
+    });
+    if (error) return { error };
+    if (value === null) {
+      delete next.modelAutoCompactTokenLimits;
+    } else {
+      const budgets: Record<string, number> = Object.assign(
+        Object.create(null) as Record<string, number>,
+        next.modelAutoCompactTokenLimits ?? {},
+      );
+      for (const [model, budget] of Object.entries(value as Record<string, number | null>)) {
+        if (budget === null) delete budgets[model];
+        else budgets[model] = budget;
+      }
+      if (Object.keys(budgets).length > 0) next.modelAutoCompactTokenLimits = budgets;
+      else delete next.modelAutoCompactTokenLimits;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "modelSupportsServiceTier")) {
     const value = rawBody.modelSupportsServiceTier;
     if (value === null) {
@@ -374,6 +398,28 @@ function applyProviderPatchFields(
   return { next, touched, editorTouched, enablingOpenAi, headersTouched };
 }
 
+/** Validate the canonical OpenAI soft-budget overlay against a fresh registry seed. */
+function canonicalOpenAiBudgetPatchError(
+  provider: OcxProviderConfig,
+  rawBody: Record<string, unknown>,
+  keys: string[],
+  config: OcxConfig,
+): string | null {
+  if (!isCanonicalOpenAiForwardProvider(provider)) {
+    return "provider openai must be the canonical built-in provider";
+  }
+  const entry = getProviderRegistryEntry("openai");
+  if (!entry) return "provider openai registry seed is unavailable";
+  const seed = providerConfigSeed(entry);
+  if (provider.codexAccountMode !== undefined) seed.codexAccountMode = provider.codexAccountMode;
+  if (provider.modelAutoCompactTokenLimits !== undefined) {
+    seed.modelAutoCompactTokenLimits = { ...provider.modelAutoCompactTokenLimits };
+  }
+  const applied = applyProviderPatchFields("openai", seed, rawBody, keys, config);
+  if ("error" in applied) return applied.error;
+  return providerManagementConfigError("openai", applied.next);
+}
+
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -410,6 +456,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -541,6 +588,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
@@ -573,6 +621,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
     }
+    if (existing?.modelAutoCompactTokenLimits) {
+      prov.modelAutoCompactTokenLimits = submittedModelAutoCompactTokenLimits
+        ? { ...existing.modelAutoCompactTokenLimits, ...(prov.modelAutoCompactTokenLimits ?? {}) }
+        : { ...existing.modelAutoCompactTokenLimits };
+    }
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
@@ -596,6 +649,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const keys = Object.keys(rawBody);
     const hasMode = Object.hasOwn(rawBody, "codexAccountMode");
     const hasSetDefault = Object.hasOwn(rawBody, "setDefault");
+    const canonicalBudgetOnly = name === "openai"
+      && keys.length === 1
+      && keys[0] === "modelAutoCompactTokenLimits";
 
     // codexAccountMode keeps its dedicated side-effect path (quota cache clear, thread map
     // clear, pool prime) and is mutually exclusive with every other patch field.
@@ -658,12 +714,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     const pacingOnly = keys.every(key => key === "requestPacing");
     if (applied.editorTouched && !pacingOnly) {
-      const providerError = providerManagementConfigError(name, next);
+      const providerError = canonicalBudgetOnly
+        ? canonicalOpenAiBudgetPatchError(next, rawBody, keys, config)
+        : providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
-      const serviceTierError = providerServiceTierConfigError(name, next);
-      if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
-      const resolvedError = await providerDestinationResolvedError(name, next);
-      if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
+      if (!canonicalBudgetOnly) {
+        const serviceTierError = providerServiceTierConfigError(name, next);
+        if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+        const resolvedError = await providerDestinationResolvedError(name, next);
+        if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
+      }
     } else if (applied.enablingOpenAi) {
       // Same DNS gate as POST: Clash fake-IP only. Never honor a persisted
       // allowPrivateNetwork on this path — it must not bypass the built-in guard.
@@ -687,15 +747,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         return;
       }
       if (replay.editorTouched && !pacingOnly) {
-        const syncError = providerManagementConfigError(name, replay.next);
+        const syncError = canonicalBudgetOnly
+          ? canonicalOpenAiBudgetPatchError(replay.next, rawBody, keys, config)
+          : providerManagementConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
           return;
         }
-        const serviceTierError = providerServiceTierConfigError(name, replay.next);
-        if (serviceTierError) {
-          replayError = serviceTierError;
-          return;
+        if (!canonicalBudgetOnly) {
+          const serviceTierError = providerServiceTierConfigError(name, replay.next);
+          if (serviceTierError) {
+            replayError = serviceTierError;
+            return;
+          }
         }
       } else if (replay.enablingOpenAi && !isCanonicalOpenAiForwardProvider(replay.next)) {
         replayError = "provider openai must be the canonical built-in provider";
