@@ -9,6 +9,7 @@ import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CloudSync from "./pages/CloudSync";
 import CodexAuth from "./pages/CodexAuth";
+import CodexSet from "./pages/CodexSet";
 import Clients from "./pages/Clients";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
@@ -39,6 +40,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   storage: "nav.storage",
   cloud: "nav.cloud",
   "codex-auth": "nav.codexAuth",
+  "codex-set": "nav.codexSet",
   clients: "nav.clients",
   integrations: "nav.integrations",
 };
@@ -62,7 +64,7 @@ type NavEntry = {
 
 const NAV: NavEntry[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
-  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
+  { id: "codex-set", tkey: "nav.codexSet", Icon: IconKey },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
@@ -344,6 +346,7 @@ export default function App() {
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "cloud" && <CloudSync apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
+            {page === "codex-set" && <CodexSet apiBase={API_BASE} />}
             {page === "clients" && <Clients apiBase={API_BASE} />}
             {page === "integrations" && <Integrations apiBase={API_BASE} />}
           </ErrorBoundary>

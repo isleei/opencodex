@@ -71,6 +71,7 @@ import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleCloudSyncRoutes } from "./management/cloud-sync-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
+import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import type { ManagementContext } from "./management/context";
@@ -219,22 +220,23 @@ export async function handleManagementAPI(
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
-      ?? (await handleStorageLogGuardRoutes(ctx))
-      ?? (await handleLogsUsageRoutes(ctx))
-      ?? (await handleRequestHistoryRoutes(ctx))
-      ?? (await handleRoutingAnalyticsRoutes(ctx))
-      ?? (await handleRoutingProfileRoutesOnDemand(ctx))
-      ?? (await handleProviderRoutes(ctx))
-      ?? (await handleModelRoutes(ctx))
-      ?? (await handleIntegrationRoutes(ctx))
-      ?? (await handleNativeIntegrationRoutes(ctx))
-      ?? (await handleAgentSettingsRoutes(ctx))
-      ?? (await handleClientsRoutes(ctx))
-      ?? (await handleOauthAccountRoutes(ctx))
-      ?? (await handleComboRoutes(ctx))
-      ?? (await handleSystemRoutes(ctx))
-      ?? (await handleCloudSyncRoutes(ctx))
-      ?? (await handleLabRoutesOnDemand(ctx))
+    ??     (await handleStorageLogGuardRoutes(ctx))
+    ??     (await handleLogsUsageRoutes(ctx))
+    ??     (await handleRequestHistoryRoutes(ctx))
+    ??     (await handleRoutingAnalyticsRoutes(ctx))
+    ??     (await handleRoutingProfileRoutesOnDemand(ctx))
+    ??     (await handleProviderRoutes(ctx))
+    ??     (await handleModelRoutes(ctx))
+    ??     (await handleIntegrationRoutes(ctx))
+    ??     (await handleNativeIntegrationRoutes(ctx))
+    ??     (await handleAgentSettingsRoutes(ctx))
+    ??     (await handleCodexPromptRoutes(ctx))
+    ??     (await handleClientsRoutes(ctx))
+    ??     (await handleOauthAccountRoutes(ctx))
+    ??     (await handleComboRoutes(ctx))
+    ??     (await handleSystemRoutes(ctx))
+    ??     (await handleCloudSyncRoutes(ctx))
+    ??     (await handleLabRoutesOnDemand(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
