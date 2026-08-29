@@ -20,12 +20,16 @@ setDefaultTimeout(SPAWN_BUDGET_MS);
 const SPAWN_TIMEOUT_MS = SPAWN_BUDGET_MS - 5_000;
 
 function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
   });
+  if (result.stderr) {
+    result.stderr = result.stderr.replace(/^warn: CPU lacks AVX support[^\n]*\n\s*https:[^\n]*\n?/gm, "");
+  }
+  return result;
 }
 
 function expectSpawnFinished(result: ReturnType<typeof spawnSync>, label: string) {
@@ -254,12 +258,7 @@ describe("CLI subcommand help", () => {
     try {
       const statePath = join(codexHome, "state_5.sqlite");
 
-      const result = spawnSync(process.execPath, [cliPath, "recover-history", "--help"], {
-        cwd: repoRoot,
-        env: { ...process.env, CODEX_HOME: codexHome },
-        encoding: "utf8",
-        timeout: SPAWN_TIMEOUT_MS,
-      });
+      const result = runCli(["recover-history", "--help"], { CODEX_HOME: codexHome });
 
       expectSpawnFinished(result, "ocx recover-history --help");
       expect(result.status).toBe(0);

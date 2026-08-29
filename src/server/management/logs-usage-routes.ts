@@ -32,8 +32,6 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
-import { resolveCodexHomeDir } from "../../codex/home";
-import { scanStorage } from "../../storage/scanner";
 import { executeArchivedCleanup, listTrashEntries, pickWireCleanupTestHooks, previewArchivedCleanup, type CleanupMode, type RestoreErrorCode } from "../../storage/cleanup";
 import { runArchivedCleanupJob } from "../../storage/cleanup-job";
 import { getRestoreTrashTestStreamResponse, runRestoreTrashEntryJob } from "../../storage/restore-job";
@@ -471,8 +469,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   if (url.pathname === "/api/usage/ingest" && req.method === "POST") {
     let body: unknown;
     try {
-      body = await req.json();
-    } catch {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
     const rawEntries = extractIngestRawEntries(body);
@@ -531,20 +530,6 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       skippedIds: skipped,
       errors: rejected,
     }, status);
-  }
-
-  if (url.pathname === "/api/storage" && req.method === "GET") {
-    try {
-      return jsonResponse(scanStorage());
-    } catch {
-      return jsonResponse({
-        codexHome: resolveCodexHomeDir(),
-        generatedAt: Date.now(),
-        total: { bytes: 0, fileCount: 0 },
-        buckets: [],
-        error: "scan_failed",
-      });
-    }
   }
 
   if (url.pathname === "/api/storage/cleanup/preview" && req.method === "POST") {

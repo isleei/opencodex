@@ -1622,6 +1622,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://app.cline.bot",
     liveModels: true,
+    preserveCustomDestination: true,
     defaultModel: "anthropic/claude-sonnet-4-6",
     models: [
       "anthropic/claude-sonnet-4-6",
