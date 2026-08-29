@@ -8,7 +8,6 @@ import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CloudSync from "./pages/CloudSync";
-import CodexAuth from "./pages/CodexAuth";
 import CodexSet from "./pages/CodexSet";
 import Clients from "./pages/Clients";
 import Integrations from "./pages/Integrations";
@@ -39,7 +38,6 @@ const PAGE_TKEY: Record<Page, TKey> = {
   usage: "nav.usage",
   storage: "nav.storage",
   cloud: "nav.cloud",
-  "codex-auth": "nav.codexAuth",
   "codex-set": "nav.codexSet",
   clients: "nav.clients",
   integrations: "nav.integrations",
@@ -345,7 +343,6 @@ export default function App() {
             {page === "usage" && <Usage apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "cloud" && <CloudSync apiBase={API_BASE} />}
-            {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "codex-set" && <CodexSet apiBase={API_BASE} />}
             {page === "clients" && <Clients apiBase={API_BASE} />}
             {page === "integrations" && <Integrations apiBase={API_BASE} />}

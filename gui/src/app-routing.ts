@@ -12,7 +12,6 @@ export type Page =
   | "usage"
   | "storage"
   | "cloud"
-  | "codex-auth"
   | "codex-set"
   | "clients"
   | "integrations";
@@ -27,7 +26,6 @@ export const VALID_PAGES = new Set<Page>([
   "usage",
   "storage",
   "cloud",
-  "codex-auth",
   "codex-set",
   "clients",
   "integrations",
