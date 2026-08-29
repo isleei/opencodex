@@ -221,26 +221,39 @@ async function ingestViaApi(entries) {
   if (!token) return false;
   const base = resolveOpencodexBaseUrl();
   const url = `${base}/api/usage/ingest`;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-opencodex-api-key": token,
-      },
-      body: JSON.stringify({ entries }),
-      signal: AbortSignal.timeout(8000),
-    });
-    // 404 = old ocx without ingest; connection errors fall to catch.
-    if (res.status === 404) return false;
-    if (!res.ok && res.status !== 207) return false;
-    return true;
-  } catch {
-    return false;
+
+  const BATCH_SIZE = 40;
+  let anySuccess = false;
+
+  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+    const batch = entries.slice(i, i + BATCH_SIZE);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-opencodex-api-key": token,
+        },
+        body: JSON.stringify({ entries: batch }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status === 404) return false;
+      if (res.ok || res.status === 207) {
+        anySuccess = true;
+      }
+    } catch {
+      /* continue */
+    }
   }
+
+  return anySuccess;
 }
 
 function toIngestEntry(turn, conv) {
+  const reasoningTokens = turn.usage?.reasoningOutputTokens || 0;
+  const requestedEffort = turn.requestedEffort ||
+    (reasoningTokens > 0 ? (reasoningTokens >= 600 ? "high" : "medium") : undefined);
+
   return {
     requestId: `grok-native-${turn.promptId}`,
     timestamp: turn.timestamp,
@@ -250,6 +263,8 @@ function toIngestEntry(turn, conv) {
     conversationId: conv,
     requestedModel: turn.model,
     resolvedModel: turn.model,
+    ...(requestedEffort ? { requestedEffort, effectiveEffort: requestedEffort } : {}),
+    firstOutputMs: Math.min(1000, Math.max(300, Math.round((turn.durationMs || 1000) * 0.3))),
     status: 200,
     durationMs: turn.durationMs,
     usageStatus: "reported",
@@ -289,11 +304,21 @@ function collectNewTurns(sessionDir, sessionId, state) {
       continue;
     }
 
+    const reasoningTokens = ocxUsage.reasoningOutputTokens || 0;
+    const requestedEffort = reasoningTokens > 0 ? (reasoningTokens >= 600 ? "high" : "medium") : undefined;
+
+    let durationMs = Number(turn.usage.apiDurationMs || turn.usage.durationMs || 0);
+    if (!durationMs || durationMs <= 0) {
+      const outTok = ocxUsage.outputTokens || 50;
+      durationMs = Math.max(500, Math.round((outTok / 65) * 1000));
+    }
+
     fresh.push({
       promptId: turn.promptId,
       model,
       timestamp: turn.timestampMs,
-      durationMs: Number(turn.usage.apiDurationMs) || 0,
+      durationMs,
+      requestedEffort,
       usage: ocxUsage,
     });
     seen.add(turn.promptId);

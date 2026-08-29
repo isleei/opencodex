@@ -223,11 +223,21 @@ interface ReasoningLogFields {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  usage?: {
+    reasoningOutputTokens?: number;
+  };
 }
 
 function effortLabel(log: ReasoningLogFields): string {
   const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
   const effective = log.effectiveEffort;
+  if (!requested && !effective) {
+    const reasoning = log.usage?.reasoningOutputTokens;
+    if (typeof reasoning === "number" && reasoning > 0) {
+      return reasoning >= 600 ? "high" : "medium";
+    }
+    return "-";
+  }
   if (!requested) return effective ?? "-";
   // requestedEffort may already contain a cap/clamp chain (for example max->high).
   // Only append the adapter result when it differs from that chain's terminal value.

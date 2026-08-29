@@ -230,6 +230,11 @@ function resolveMatchedPriceInner(
     const baseMatch = resolveMatchedPriceInner("google-antigravity", modelId, overlays, userOverlays);
     if (baseMatch) return { ...baseMatch, provider };
   }
+  if (provider === "xai-native" || provider.startsWith("xai-native")) {
+    const baseMatch = resolveMatchedPriceInner("xai", modelId, overlays, userOverlays)
+      ?? (modelId.endsWith("-build") ? resolveMatchedPriceInner("xai", modelId.slice(0, -"-build".length), overlays, userOverlays) : null);
+    if (baseMatch) return { ...baseMatch, provider };
+  }
   // Antigravity historical/wire ids often lack an exact overlay; fall back to the
   // picker/call base model so collapsed usage rows still get a price.
   if (provider === "google-antigravity" || provider.startsWith("google-antigravity")) {

@@ -150,21 +150,34 @@ export function costResult(entry: MetricSource): CostResult {
 }
 
 export function requestLogDto(entry: RequestLogEntry): Record<string, unknown> {
+  const reasoningTokens = entry.usage?.reasoningOutputTokens ?? 0;
+  const inferredEffort = !entry.requestedEffort && !entry.effectiveEffort && reasoningTokens > 0
+    ? (reasoningTokens >= 600 ? "high" : "medium")
+    : undefined;
+
   return {
     ...entry,
+    ...(inferredEffort ? { requestedEffort: inferredEffort, effectiveEffort: inferredEffort } : {}),
     displayMetrics: {
       tokPerSecond: tokPerSecondResult(entry),
       cost: costResult(entry),
     },
     ...(entry.attempts?.length
       ? {
-        attempts: entry.attempts.map(attempt => ({
-          ...attempt,
-          displayMetrics: {
-            tokPerSecond: tokPerSecondResult(attempt),
-            cost: costResult({ ...attempt, attempts: undefined, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
-          },
-        })),
+        attempts: entry.attempts.map(attempt => {
+          const aReasoning = attempt.usage?.reasoningOutputTokens ?? 0;
+          const aInferred = !attempt.requestedEffort && !attempt.effectiveEffort && aReasoning > 0
+            ? (aReasoning >= 600 ? "high" : "medium")
+            : undefined;
+          return {
+            ...attempt,
+            ...(aInferred ? { requestedEffort: aInferred, effectiveEffort: aInferred } : {}),
+            displayMetrics: {
+              tokPerSecond: tokPerSecondResult(attempt),
+              cost: costResult({ ...attempt, attempts: undefined, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
+            },
+          };
+        }),
       }
       : {}),
   };
