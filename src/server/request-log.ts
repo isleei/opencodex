@@ -52,7 +52,7 @@ export interface RequestLogContext {
   firstOutputMs?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: PersistedUsageEntry["surface"];
   /** The matched configured key's id. Set ONLY for admissionKind "configured" —
    *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
    *  cannot absorb unrelated traffic. */
@@ -139,7 +139,7 @@ export interface RequestLogEntry {
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: PersistedUsageEntry["surface"];
   /**
    * Set when the proxy answered this turn locally and sent nothing upstream. Without it a zero-send
    * row is indistinguishable from a request that vanished. A fixed adapter-supplied identifier,

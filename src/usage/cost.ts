@@ -226,6 +226,10 @@ function resolveMatchedPriceInner(
 ): MatchedPrice | null {
   const direct = resolveMatchedPriceExact(provider, modelId, overlays, userOverlays);
   if (direct) return direct;
+  if (provider === "google-antigravity-native" || provider.startsWith("google-antigravity-native")) {
+    const baseMatch = resolveMatchedPriceInner("google-antigravity", modelId, overlays, userOverlays);
+    if (baseMatch) return { ...baseMatch, provider };
+  }
   // Antigravity historical/wire ids often lack an exact overlay; fall back to the
   // picker/call base model so collapsed usage rows still get a price.
   if (provider === "google-antigravity" || provider.startsWith("google-antigravity")) {

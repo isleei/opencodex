@@ -262,7 +262,8 @@ function usageModelIdentity(
   model: string,
   resolvedModel?: string,
 ): { model: string; resolvedModel?: string } {
-  if (baseProviderLabel(provider) !== "google-antigravity") {
+  const base = baseProviderLabel(provider);
+  if (base !== "google-antigravity" && base !== "google-antigravity-native") {
     return resolvedModel ? { model, resolvedModel } : { model };
   }
   const fromModel = canonicalAntigravityUsageModel(model);
@@ -282,7 +283,8 @@ function usageModelKey(providerKey: string, model: string): string {
 }
 
 function antigravityUsageModel(provider: string, model: string): string {
-  if (baseProviderLabel(provider) !== "google-antigravity") return model;
+  const base = baseProviderLabel(provider);
+  if (base !== "google-antigravity" && base !== "google-antigravity-native") return model;
   return canonicalAntigravityUsageModel(model);
 }
 

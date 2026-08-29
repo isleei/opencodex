@@ -186,6 +186,13 @@ function parseIngestEntry(
   const resolvedModel = typeof raw.resolvedModel === "string" && raw.resolvedModel.length <= 256
     ? raw.resolvedModel
     : undefined;
+  const requestedEffort = typeof raw.requestedEffort === "string" && raw.requestedEffort.length <= 64
+    ? raw.requestedEffort
+    : undefined;
+  const effectiveEffort = typeof raw.effectiveEffort === "string" && raw.effectiveEffort.length <= 64
+    ? raw.effectiveEffort
+    : undefined;
+  const firstOutputMs = isNonNegativeFiniteNumber(raw.firstOutputMs) ? raw.firstOutputMs : undefined;
 
   const entry: RequestLogEntry = {
     requestId,
@@ -199,6 +206,9 @@ function parseIngestEntry(
     ...(conversationId ? { conversationId } : {}),
     ...(requestedModel ? { requestedModel } : {}),
     ...(resolvedModel ? { resolvedModel } : {}),
+    ...(requestedEffort ? { requestedEffort } : {}),
+    ...(effectiveEffort ? { effectiveEffort } : {}),
+    ...(firstOutputMs !== undefined ? { firstOutputMs } : {}),
     ...(usage ? { usage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
   };
