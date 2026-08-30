@@ -80,6 +80,8 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   const [startAuto, setStartAuto] = useState(false);
   const [copied, setCopied] = useState(false);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [goDescription, setGoDescription] = useState("");
+  const [goBusy, setGoBusy] = useState(false);
   const [editor, setEditor] = useState<{ draft: WorkflowDefinition; idLocked: boolean; overridesBuiltin: boolean } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorErrors, setEditorErrors] = useState<string[] | null>(null);
@@ -260,6 +262,30 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
     }
   };
 
+  const quickGo = async () => {
+    if (!goDescription.trim()) return;
+    setGoBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/workflows/go`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: goDescription.trim() }),
+      });
+      const body = (await res.json()) as { error?: string; task?: WorkflowTask };
+      if (!res.ok) throw new Error(body.error || `go failed (${res.status})`);
+      setNotice(t("workflows.go.started"));
+      setGoDescription("");
+      await refreshLists();
+      if (body.task) void openRun(body.task.id);
+      setTimeout(() => setNotice(null), 4000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGoBusy(false);
+    }
+  };
+
   const roleSlotsFor = (def: WorkflowDefinition | null): string[] => {
     if (!def) return [];
     const roles = new Set<string>();
@@ -340,6 +366,26 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
       {error && <div className="session-error-banner">{error}</div>}
       {notice && <div className="session-error-banner workflows-notice">{notice}</div>}
+
+      <div className="workflows-quickgo">
+        <input
+          type="text"
+          className="workflows-quickgo-input"
+          placeholder={t("workflows.go.placeholder")}
+          value={goDescription}
+          onChange={e => setGoDescription(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !goBusy) void quickGo(); }}
+        />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => void quickGo()}
+          disabled={goBusy || !goDescription.trim()}
+        >
+          <IconPlay /> {t("workflows.go.button")}
+        </button>
+      </div>
+      <p className="workflows-quickgo-hint">{t("workflows.go.hint")}</p>
 
       <div className="workflows-layout">
         <div className="workflows-runs-column">

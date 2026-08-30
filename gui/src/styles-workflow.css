@@ -459,3 +459,31 @@
   display: flex;
   gap: 4px;
 }
+
+/* One-command quick start */
+.workflows-quickgo {
+  display: flex;
+  gap: 8px;
+}
+
+.workflows-quickgo-input {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.workflows-quickgo-input:focus {
+  border-color: var(--blue);
+  outline: none;
+}
+
+.workflows-quickgo-hint {
+  margin: -6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}

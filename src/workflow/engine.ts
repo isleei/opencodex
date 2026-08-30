@@ -87,6 +87,8 @@ export function startRun(
     workspaceDir?: string;
     roleOverrides?: Record<string, string>;
     autoRun?: boolean;
+    /** Model ref used for every role the operator did not pin (one-command starts). */
+    fallbackModelRef?: string;
   },
   baseDir?: string,
 ): WorkflowTask {
@@ -101,6 +103,19 @@ export function startRun(
   const title = input.title.trim();
   if (!title) throw new WorkflowError("run title is required");
 
+  // One-command starts: pin every role the definition references that the operator
+  // did not set, so "go" works with zero configuration.
+  const roleOverrides: Record<string, string> = { ...(input.roleOverrides ?? {}) };
+  if (input.fallbackModelRef) {
+    for (const phase of definition.phases) {
+      const ref = phase.modelRef?.trim();
+      if (ref?.startsWith("role:")) {
+        const role = ref.slice(5).trim();
+        if (role && !roleOverrides[role]) roleOverrides[role] = input.fallbackModelRef;
+      }
+    }
+  }
+
   const createdAt = now();
   const task: WorkflowTask = {
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -109,7 +124,7 @@ export function startRun(
     status: "running",
     phaseIndex: 0,
     phases: definition.phases.map(phase => ({ id: phase.id, status: "pending" as const })),
-    roleOverrides: input.roleOverrides,
+    roleOverrides,
     autoRun: input.autoRun,
     workspaceDir: input.workspaceDir,
     createdAt,

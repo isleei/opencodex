@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
+import { classifyWorkflow } from "../src/server/management/workflow-routes";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import type { OcxConfig } from "../src/types";
 
@@ -157,6 +158,31 @@ describe("Management Workflow REST API (/api/workflows*)", () => {
 
     const missing = await dispatchRequest("DELETE", "/api/workflows/never-existed");
     expect(missing.status).toBe(404);
+  });
+
+  test("go classifies by keyword and starts executing with the given model", async () => {
+    expect(classifyWorkflow("fix the login bug")).toBe("debug-investigate");
+    expect(classifyWorkflow("审查一下这个 diff")).toBe("review-audit");
+    expect(classifyWorkflow("add rate limiting to the API")).toBe("feature-delivery");
+
+    const { status, body } = await dispatchRequest("POST", "/api/workflows/go", {
+      description: "add rate limiting to the API",
+      modelRef: "xai/grok-4.5",
+    });
+    expect(status).toBe(200);
+    expect(body.task.status).toBe("running");
+    expect(body.fallbackModelRef).toBe("xai/grok-4.5");
+    // every role: reference in feature-delivery is pinned to the fallback
+    const refs = new Set(Object.values(body.task.roleOverrides ?? {}));
+    expect(refs).toEqual(new Set(["xai/grok-4.5"]));
+  });
+
+  test("go without a resolvable model is a 409 with guidance", async () => {
+    const { status, body } = await dispatchRequest("POST", "/api/workflows/go", {
+      description: "something",
+    });
+    expect(status).toBe(409);
+    expect(body.code).toBe("no_default_model");
   });
 
   test("unknown runs return 404 and abort terminates a run", async () => {

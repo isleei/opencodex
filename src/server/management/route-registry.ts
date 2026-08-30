@@ -310,6 +310,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/workflows", module: "server/management/workflow-routes", mutates: true },
   { method: "GET", path: "/api/workflows/runs", module: "server/management/workflow-routes", mutates: false },
   { method: "POST", path: "/api/workflows/runs", module: "server/management/workflow-routes", mutates: true },
+  { method: "POST", path: "/api/workflows/go", module: "server/management/workflow-routes", mutates: true },
   // server/management/skills-routes
   { method: "GET", path: "/api/skills", module: "server/management/skills-routes", mutates: false },
   { method: "GET", path: "/api/skills/trash", module: "server/management/skills-routes", mutates: false },

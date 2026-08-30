@@ -910,6 +910,22 @@ Generate handoff context and dispatch execution to target agent.
 
 JSON mode: `payload`.
 
+### `ocx workflow go`
+
+One-command start: classify the task, bind the default model, execute to the first gate.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/go` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--workflow` | string | Force a specific workflow definition. |
+| `--model` | string | Bind every unpinned role to this model ref. |
+| `--json` | boolean | Emit the started run as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx workflow delete`
 
 Delete a user workflow definition (built-ins cannot be deleted).
@@ -1004,6 +1020,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 58
-- of those, state-changing: 29
+- declared capabilities: 59
+- of those, state-changing: 30
 - head-resolved invocations: 2

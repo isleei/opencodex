@@ -728,6 +728,19 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
   },
   {
+    command: ["workflow", "go"],
+    summary: "One-command start: classify the task, bind the default model, execute to the first gate.",
+    routes: [{ method: "POST", path: "/api/workflows/go" }],
+    flags: [
+      { name: "--workflow", value: "string", summary: "Force a specific workflow definition." },
+      { name: "--model", value: "string", summary: "Bind every unpinned role to this model ref." },
+      { name: "--json", value: "boolean", summary: "Emit the started run as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    bannerLines: ["ocx workflow go \"<description>\"  One-command workflow start (plans, then stops at a gate)"],
+  },
+  {
     command: ["workflow", "list"],
     summary: "List workflow definitions (built-ins plus user files).",
     routes: [{ method: "GET", path: "/api/workflows" }],

@@ -29,6 +29,38 @@ import { syncWorkflowLayer } from "../../workflow/inject";
 import { ensureWorkflowSkill } from "../../workflow/skill";
 import type { WorkflowDefinition } from "../../workflow/types";
 
+/** CCG-style one-command classification: keyword match, else feature delivery. */
+export function classifyWorkflow(description: string): string {
+  const d = description.toLowerCase();
+  if (/(debug|bug|报错|报错|修复|排查|错误|investigat|diagnos|fix\b)/i.test(d)) return "debug-investigate";
+  if (/(review|审查|审计|audit|检查.*代码|code.*check)/i.test(d)) return "review-audit";
+  return "feature-delivery";
+}
+
+/** The operator's current default model as a routable ref, if one is resolvable. */
+export async function defaultModelRef(config: ManagementContext["config"]): Promise<string | null> {
+  const refFor = (providerName: string, model: string): string => {
+    // Bare gpt-* ids route through the canonical openai provider; everyone else
+    // needs the namespaced form.
+    if (providerName === "openai" || /^(gpt-|o[134]-)/i.test(model)) return model;
+    return `${providerName}/${model}`;
+  };
+  const providerName = config.defaultProvider;
+  const provider = providerName ? config.providers?.[providerName] : undefined;
+  const model = provider?.defaultModel?.trim();
+  if (model) return refFor(providerName, model);
+  // First combo — the virtual model the operator already maintains as a daily driver.
+  const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
+  const comboId = listComboIds(config)[0];
+  const combo = comboId ? getCombo(config, comboId) : undefined;
+  if (comboId && combo) return comboPublicModelId(comboId, combo);
+  for (const [name, p] of Object.entries(config.providers ?? {})) {
+    const candidate = (p as { defaultModel?: string } | undefined)?.defaultModel?.trim();
+    if (candidate) return refFor(name, candidate);
+  }
+  return null;
+}
+
 function executorOptions(ctx: ManagementContext) {
   // The data plane admits either admission secret; prefer the API one when present.
   const token = configuredApiAuthToken() ?? configuredAdminAuthToken() ?? "";
@@ -95,6 +127,49 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: result.error, code: "delete_definition_failed" }, result.error.includes("built-in") ? 400 : 404, req, ctx.config);
     }
     return jsonResponse({ ok: true }, 200, req, ctx.config);
+  }
+
+  // 2c. POST /api/workflows/go — the one-command entry: classify, bind the operator's
+  // default model to every role, and start executing immediately.
+  if (url.pathname === "/api/workflows/go" && req.method === "POST") {
+    const parsed = await readJsonBody(ctx);
+    if (parsed instanceof Response) return parsed;
+    const body = isPlainRecord(parsed) ? parsed : {};
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    if (!description) {
+      return jsonResponse({ error: "description is required", code: "invalid_description" }, 400, req, ctx.config);
+    }
+    const workflowId = typeof body.workflowId === "string" && body.workflowId ? body.workflowId : classifyWorkflow(description);
+    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : description.slice(0, 80);
+    const fallbackModelRef = typeof body.modelRef === "string" && body.modelRef.trim()
+      ? body.modelRef.trim()
+      : await defaultModelRef(ctx.config);
+    if (!fallbackModelRef) {
+      return jsonResponse(
+        { error: "no default model configured — pass modelRef or set a provider defaultModel", code: "no_default_model" },
+        409,
+        req,
+        ctx.config,
+      );
+    }
+    try {
+      const task = startRun({
+        workflowId,
+        title,
+        workspaceDir: typeof body.workspaceDir === "string" ? body.workspaceDir : undefined,
+        roleOverrides: isPlainRecord(body.roleOverrides)
+          ? Object.fromEntries(Object.entries(body.roleOverrides).filter(([, v]) => typeof v === "string") as Array<[string, string]>)
+          : undefined,
+        autoRun: true,
+        fallbackModelRef,
+      });
+      ensureWorkflowSkill();
+      const execution = kickExecution(task.id, { ...executorOptions(ctx), auto: true });
+      syncWorkflowLayer();
+      return jsonResponse({ ok: true, task, workflowId, fallbackModelRef, execution }, 200, req, ctx.config);
+    } catch (error) {
+      return errorResponse(error, req, ctx.config);
+    }
   }
 
   // 3. GET /api/workflows/runs

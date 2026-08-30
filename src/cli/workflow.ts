@@ -28,6 +28,9 @@ import {
 import type { WorkflowDefinition, WorkflowPhaseState, WorkflowTask } from "../workflow/types";
 
 const USAGE = `Usage:
+  ocx workflow go "<one-line description>" [--workflow <id>] [--model <ref>] [--json]
+      One-command start: picks the workflow, binds your default model, executes
+      automatically, and stops at the first approval gate.
   ocx workflow list [--json]
   ocx workflow show <workflow-id> [--json]
   ocx workflow run <workflow-id> --title <title> [--set role=model-ref]... [--workspace <dir>] [--json]
@@ -347,13 +350,45 @@ async function abort(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`Run ${result.task.id} aborted.`]);
 }
 
+async function go(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const workflowId = takeOption(args, "--workflow");
+  const modelRef = takeOption(args, "--model");
+  // The description is the whole positional tail — everything left after flags.
+  const description = args.join(" ").trim();
+  args.length = 0;
+  rejectArgs(args, USAGE);
+  if (!description) throw new CliUsageError('describe what you want, e.g. ocx workflow go "add rate limiting to the login API"', USAGE);
+
+  const result = await runtimeRequest<{ ok: boolean; task: WorkflowTask; workflowId: string; fallbackModelRef: string | null }>(
+    "/api/workflows/go",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, workflowId, modelRef }),
+    },
+    deps,
+  );
+  const task = result.task;
+  printData(result, wantsJson, [
+    `Run ${task.id} started (${result.workflowId}) — models default to ${result.fallbackModelRef ?? "?"}`,
+    ...formatPhaseTimeline(task.phases),
+    ``,
+    `The plan phase is running; the run will stop at the first gate.`,
+    `Approve it with:  ocx workflow gate ${task.id} approve   (or the dashboard)`,
+    `Watch progress:   ocx workflow status ${task.id}`,
+  ]);
+}
+
 export async function handleWorkflowCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const hasSub = argv[0] !== undefined && !argv[0].startsWith("-");
   const sub = hasSub ? argv[0]! : "list";
   const rest = hasSub ? argv.slice(1) : argv;
 
   return runCliAction(async () => {
-    if (sub === "list") await list(rest, deps);
+    if (sub === "go") await go(rest, deps);
+    else if (sub === "list") await list(rest, deps);
     else if (sub === "show") await show(rest, deps);
     else if (sub === "run" || sub === "start") await run(rest, deps);
     else if (sub === "runs" || sub === "status-list") await runs(rest, deps);
