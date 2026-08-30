@@ -16,8 +16,12 @@ export function createIsolatedTestEnvironment(
   const root = mkdtempSync(join(tmpdir(), "opencodex-test-"));
   const opencodexHome = join(root, ".opencodex");
   const codexHome = join(root, ".codex");
+  const claudeHome = join(root, ".claude");
+  const grokHome = join(root, ".grok");
   mkdirSync(opencodexHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(grokHome, { recursive: true });
   if (process.platform === "win32") {
     // A Windows sandbox has to look like a real profile, because the known-folder APIs
     // resolve relative to USERPROFILE and .NET returns an EMPTY STRING — not an error —
@@ -54,6 +58,10 @@ export function createIsolatedTestEnvironment(
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
       CODEX_HOME: codexHome,
+      // Bun's os.homedir() ignores $HOME on macOS, so without explicit overrides the
+      // session scanners would read the developer's real ~/.claude and ~/.grok.
+      CLAUDE_HOME: claudeHome,
+      GROK_HOME: grokHome,
     },
     cleanup() {
       rmSync(root, { recursive: true, force: true });
