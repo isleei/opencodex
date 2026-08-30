@@ -23,7 +23,7 @@ import {
   rejectGate,
   startRun,
 } from "../../workflow/engine";
-import { listDefinitions, listTasks, saveDefinition } from "../../workflow/store";
+import { deleteDefinition, listDefinitions, listTasks, saveDefinition } from "../../workflow/store";
 import { isExecuting as kickIsExecuting, kickExecution } from "../../workflow/executor";
 import { syncWorkflowLayer } from "../../workflow/inject";
 import { ensureWorkflowSkill } from "../../workflow/skill";
@@ -84,6 +84,17 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: result.errors.join("; "), code: "invalid_definition" }, 400, req, ctx.config);
     }
     return jsonResponse({ ok: true, definition: def }, 200, req, ctx.config);
+  }
+
+  // 2b. DELETE /api/workflows/{id} — remove a user definition
+  const deleteMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)$/);
+  if (deleteMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(deleteMatch[1]);
+    const result = deleteDefinition(id);
+    if (!result.ok) {
+      return jsonResponse({ error: result.error, code: "delete_definition_failed" }, result.error.includes("built-in") ? 400 : 404, req, ctx.config);
+    }
+    return jsonResponse({ ok: true }, 200, req, ctx.config);
   }
 
   // 3. GET /api/workflows/runs

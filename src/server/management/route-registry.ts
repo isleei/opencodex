@@ -326,7 +326,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (32). ---
+  // --- Routes an equality scan of their own file cannot see (33). ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },
@@ -353,6 +353,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/sessions/{agent}/{id}", module: "server/management/sessions-routes", mutates: false, mechanism: "regex" },
   { method: "POST", path: "/api/sessions/{agent}/{id}/handoff", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/sessions/{agent}/{id}/dispatch", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
+  { method: "DELETE", path: "/api/workflows/{id}", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/workflows/runs/{id}", module: "server/management/workflow-routes", mutates: false, mechanism: "regex" },
   { method: "POST", path: "/api/workflows/runs/{id}/execute", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/workflows/runs/{id}/advance", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },

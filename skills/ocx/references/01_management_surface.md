@@ -910,6 +910,20 @@ Generate handoff context and dispatch execution to target agent.
 
 JSON mode: `payload`.
 
+### `ocx workflow delete`
+
+Delete a user workflow definition (built-ins cannot be deleted).
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/workflows/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the result as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx workflow run`
 
 Start a run of a workflow definition.
@@ -990,6 +1004,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 57
-- of those, state-changing: 28
+- declared capabilities: 58
+- of those, state-changing: 29
 - head-resolved invocations: 2

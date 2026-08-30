@@ -737,6 +737,14 @@ export const CAPABILITIES: readonly Capability[] = [
     bannerLines: ["ocx workflow list           List phase-sequenced workflow definitions"],
   },
   {
+    command: ["workflow", "delete"],
+    summary: "Delete a user workflow definition (built-ins cannot be deleted).",
+    routes: [{ method: "DELETE", path: "/api/workflows/{id}" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the result as JSON." }],
+    mutates: true,
+    json: "payload",
+  },
+  {
     command: ["workflow", "show"],
     summary: "Inspect a workflow definition's phases, roles, and gates.",
     routes: [{ method: "GET", path: "/api/workflows" }],

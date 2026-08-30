@@ -141,6 +141,24 @@ describe("Management Workflow REST API (/api/workflows*)", () => {
     expect(detail.body.journal.some((e: any) => e.event === "gate_rejected")).toBe(true);
   });
 
+  test("user definitions can be deleted; built-ins cannot", async () => {
+    await dispatchRequest("POST", "/api/workflows", {
+      definition: { id: "deletable-flow", phases: [{ id: "only" }] },
+    });
+    const deleted = await dispatchRequest("DELETE", "/api/workflows/deletable-flow");
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.ok).toBe(true);
+    const listed = await dispatchRequest("GET", "/api/workflows");
+    expect(listed.body.definitions.map((d: any) => d.id)).not.toContain("deletable-flow");
+
+    const builtin = await dispatchRequest("DELETE", "/api/workflows/feature-delivery");
+    expect(builtin.status).toBe(400);
+    expect(builtin.body.error).toContain("built-in");
+
+    const missing = await dispatchRequest("DELETE", "/api/workflows/never-existed");
+    expect(missing.status).toBe(404);
+  });
+
   test("unknown runs return 404 and abort terminates a run", async () => {
     const missing = await dispatchRequest("GET", "/api/workflows/runs/no-such-task");
     expect(missing.status).toBe(404);

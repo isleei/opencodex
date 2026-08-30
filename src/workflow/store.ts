@@ -10,7 +10,7 @@
  * `OPENCODEX_HOME`, or isolate further with an explicit `baseDir`.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { BUILTIN_WORKFLOWS } from "./builtins";
@@ -96,6 +96,16 @@ export function listDefinitions(baseDir?: string): WorkflowDefinition[] {
 
 export function getDefinition(id: string, baseDir?: string): WorkflowDefinition | null {
   return listDefinitions(baseDir).find(def => def.id === id) ?? null;
+}
+
+/** Remove a USER definition file. Built-ins cannot be deleted (they shadow nothing). */
+export function deleteDefinition(id: string, baseDir?: string): { ok: true } | { ok: false; error: string } {
+  const builtin = BUILTIN_WORKFLOWS.some(def => def.id === id);
+  if (builtin) return { ok: false, error: `'${id}' is a built-in workflow and cannot be deleted` };
+  const file = join(workflowDirs(baseDir).definitions, `${id}.json`);
+  if (!existsSync(file)) return { ok: false, error: `no user definition '${id}'` };
+  rmSync(file, { force: true });
+  return { ok: true };
 }
 
 export function saveDefinition(def: WorkflowDefinition, baseDir?: string): { ok: true } | { ok: false; errors: string[] } {

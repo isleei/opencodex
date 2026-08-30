@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconBot, IconCheck, IconCopy, IconFolder, IconPlay, IconRefresh, IconTerminal, IconX } from "../icons";
 import { formatTokens } from "../format-tokens";
+import WorkflowEditor from "./WorkflowEditor";
 import "../styles-workflow.css";
 
-interface WorkflowPhase {
+export interface WorkflowPhase {
   id: string;
   title?: string;
   gate?: { id: string; rejectTo?: string };
@@ -13,7 +14,7 @@ interface WorkflowPhase {
   inputs?: string[];
 }
 
-interface WorkflowDefinition {
+export interface WorkflowDefinition {
   id: string;
   title?: string;
   description?: string;
@@ -74,6 +75,9 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   const [startRoles, setStartRoles] = useState<Record<string, string>>({});
   const [startAuto, setStartAuto] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [editor, setEditor] = useState<{ draft: WorkflowDefinition; idLocked: boolean; overridesBuiltin: boolean } | null>(null);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorErrors, setEditorErrors] = useState<string[] | null>(null);
   const pollRef = useRef<number | null>(null);
 
   const refreshLists = useCallback(async () => {
@@ -177,6 +181,42 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
     }
   };
 
+  const saveDefinition = async (draft: WorkflowDefinition) => {
+    setEditorSaving(true);
+    setEditorErrors(null);
+    try {
+      const res = await fetch(`${apiBase}/api/workflows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ definition: draft }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error || `save failed (${res.status})`);
+      setEditor(null);
+      setNotice(`Workflow “${draft.id}” saved`);
+      await refreshLists();
+      setTimeout(() => setNotice(null), 4000);
+    } catch (err) {
+      setEditorErrors(err instanceof Error ? err.message.split("; ") : [String(err)]);
+    } finally {
+      setEditorSaving(false);
+    }
+  };
+
+  const deleteDefinition = async (id: string) => {
+    if (!window.confirm(`Delete user workflow “${id}”? Runs already in progress are unaffected.`)) return;
+    try {
+      const res = await fetch(`${apiBase}/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error || `delete failed (${res.status})`);
+      setNotice(`Workflow “${id}” deleted`);
+      await refreshLists();
+      setTimeout(() => setNotice(null), 4000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const roleSlotsFor = (def: WorkflowDefinition | null): string[] => {
     if (!def) return [];
     const roles = new Set<string>();
@@ -216,6 +256,27 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
             disabled={loading}
           >
             <IconRefresh className={loading ? "spin" : ""} /> Refresh
+          </button>
+          <button
+            id="workflows-btn-editor"
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              setEditorErrors(null);
+              setEditor({
+                draft: {
+                  id: "",
+                  title: "",
+                  description: "",
+                  defaults: {},
+                  phases: [{ id: "plan", mode: "chat", prompt: "" }],
+                },
+                idLocked: false,
+                overridesBuiltin: false,
+              });
+            }}
+          >
+            New Workflow
           </button>
           <button
             id="workflows-btn-start"
@@ -274,6 +335,40 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                 <div className="workflows-def-head">
                   <strong>{def.id}</strong>
                   {def.builtin && <span className="workflows-def-badge">built-in</span>}
+                  <span className="workflows-def-actions">
+                    {def.builtin ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          setEditorErrors(null);
+                          setEditor({ draft: structuredClone(def), idLocked: true, overridesBuiltin: true });
+                        }}
+                      >
+                        Customize
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => {
+                            setEditorErrors(null);
+                            setEditor({ draft: structuredClone(def), idLocked: true, overridesBuiltin: false });
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm workflows-abort"
+                          onClick={() => void deleteDefinition(def.id)}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </span>
                 </div>
                 <p className="workflows-def-desc">{def.title || def.description}</p>
                 <div className="workflows-def-phases">
@@ -485,6 +580,18 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
             </div>
           </div>
         </div>
+      )}
+
+      {editor && (
+        <WorkflowEditor
+          draft={editor.draft}
+          idLocked={editor.idLocked}
+          overridesBuiltin={editor.overridesBuiltin}
+          saving={editorSaving}
+          errors={editorErrors}
+          onSave={draft => void saveDefinition(draft)}
+          onClose={() => setEditor(null)}
+        />
       )}
     </div>
   );

@@ -36,7 +36,8 @@ const USAGE = `Usage:
   ocx workflow advance <task-id> [--outputs <text>] [--json]
   ocx workflow execute <task-id> [--auto] [--json]
   ocx workflow gate <task-id> <approve|reject> [--note <text>] [--json]
-  ocx workflow abort <task-id> [--reason <text>] [--json]`;
+  ocx workflow abort <task-id> [--reason <text>] [--json]
+  ocx workflow delete <workflow-id> [--json]`;
 
 function pad(str: string, length: number): string {
   return str.length >= length ? str : str + " ".repeat(length - str.length);
@@ -279,6 +280,21 @@ async function execute(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   ]);
 }
 
+async function removeDefinition(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const id = args.shift();
+  rejectArgs(args, USAGE);
+  if (!id) throw new CliUsageError("missing workflow id", USAGE);
+
+  const result = await runtimeRequest<{ ok: boolean }>(
+    `/api/workflows/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    deps,
+  );
+  printData(result, wantsJson, [`Workflow "${id}" deleted.`]);
+}
+
 async function gate(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -346,6 +362,7 @@ export async function handleWorkflowCommand(argv: string[], deps: RuntimeApiDeps
     else if (sub === "execute" || sub === "run-phase") await execute(rest, deps);
     else if (sub === "gate") await gate(rest, deps);
     else if (sub === "abort" || sub === "stop") await abort(rest, deps);
+    else if (sub === "delete" || sub === "rm") await removeDefinition(rest, deps);
     else throw new CliUsageError(`unknown workflow subcommand: "${sub}"`, USAGE);
   });
 }
