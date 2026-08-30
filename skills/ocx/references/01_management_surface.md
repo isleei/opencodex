@@ -923,6 +923,7 @@ Start a run of a workflow definition.
 | `--title` | string | Human title for the run. |
 | `--set` | string | Pin a role to a model ref (repeatable, role=model-ref). |
 | `--workspace` | string | Working directory for agent-mode phases. |
+| `--auto` | boolean | Execute phases automatically until the next gate or completion. |
 | `--json` | boolean | Emit the started run as JSON. |
 
 JSON mode: `payload`.
@@ -939,6 +940,21 @@ Complete the current phase and move to the next one.
 |---|---|---|
 | `--outputs` | string | Text output to record for the completed phase. |
 | `--json` | boolean | Emit the updated task as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow execute`
+
+Execute the current phase (chat via the proxy, agent via codex exec); --auto keeps going.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/runs/{id}/execute` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--auto` | boolean | Keep executing and advancing until the next gate, manual phase, or completion. |
+| `--json` | boolean | Emit the receipt as JSON. |
 
 JSON mode: `payload`.
 
@@ -974,6 +990,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 56
-- of those, state-changing: 27
+- declared capabilities: 57
+- of those, state-changing: 28
 - head-resolved invocations: 2

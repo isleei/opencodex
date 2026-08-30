@@ -98,7 +98,7 @@ describe("MCP Non-Destructive Writers", () => {
       promptSuggestions: false,
       editorMode: "vim",
       oauthAccount: {
-        email: "engineer@company.com",
+        email: "engineer@example.com",
         tenant: "corp",
       },
       mcpServers: {

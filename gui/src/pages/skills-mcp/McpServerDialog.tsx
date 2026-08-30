@@ -302,7 +302,7 @@ export default function McpServerDialog({
                   value={cwd}
                   onChange={e => setCwd(e.target.value)}
                   disabled={submitting}
-                  placeholder="/Users/username/project"
+                  placeholder="~/projects/my-app"
                 />
               </div>
             </>
