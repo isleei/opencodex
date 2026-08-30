@@ -332,6 +332,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx sessions.",
   },
   {
+    name: "workflow",
+    aliases: ["workflows"],
+    usage: "ocx workflow <list|show|run|runs|status|advance|gate|abort> ...",
+    summary: "Codex-led workflow engine: phase-sequenced model runs with approval gates.",
+    details: [
+      "list [--json]                    List workflow definitions (built-ins plus user files).",
+      "show <id> [--json]               Inspect a definition's phases, roles, and gates.",
+      "run <id> --title <t> [--set role=model-ref]... Start a run of a workflow.",
+      "runs [--json]                    List runs (newest first).",
+      "status <task-id> [--json]        Inspect a run: phase timeline, gate, journal tail.",
+      "advance <task-id> [--outputs t]  Complete the current phase and move on.",
+      "gate <task-id> <approve|reject>  Resolve the gate the run is waiting at.",
+      "abort <task-id> [--reason t]     Abort a run.",
+    ],
+  },
+  {
     name: "claude",
     usage: "ocx claude [claude args...]",
     summary: "Launch Claude Code wired to the proxy (env injection + gateway model discovery).",

@@ -305,6 +305,11 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/sessions-routes
   { method: "GET", path: "/api/sessions", module: "server/management/sessions-routes", mutates: false },
+  // server/management/workflow-routes
+  { method: "GET", path: "/api/workflows", module: "server/management/workflow-routes", mutates: false },
+  { method: "POST", path: "/api/workflows", module: "server/management/workflow-routes", mutates: true },
+  { method: "GET", path: "/api/workflows/runs", module: "server/management/workflow-routes", mutates: false },
+  { method: "POST", path: "/api/workflows/runs", module: "server/management/workflow-routes", mutates: true },
   // server/management/skills-routes
   { method: "GET", path: "/api/skills", module: "server/management/skills-routes", mutates: false },
   { method: "GET", path: "/api/skills/trash", module: "server/management/skills-routes", mutates: false },
@@ -321,7 +326,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (27). ---
+  // --- Routes an equality scan of their own file cannot see (31). ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },
@@ -348,6 +353,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/sessions/{agent}/{id}", module: "server/management/sessions-routes", mutates: false, mechanism: "regex" },
   { method: "POST", path: "/api/sessions/{agent}/{id}/handoff", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/sessions/{agent}/{id}/dispatch", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
+  { method: "GET", path: "/api/workflows/runs/{id}", module: "server/management/workflow-routes", mutates: false, mechanism: "regex" },
+  { method: "POST", path: "/api/workflows/runs/{id}/advance", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/workflows/runs/{id}/gate", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/workflows/runs/{id}/abort", module: "server/management/workflow-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/lab/subjects/{id}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/events/{id}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/artifacts/{digest}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },

@@ -77,6 +77,7 @@ import { handleNativeIntegrationRoutes } from "./management/native-integration-r
 import { handleSkillsRoutes } from "./management/skills-routes";
 import { handleMcpRoutes } from "./management/mcp-routes";
 import { handleSessionsRoutes } from "./management/sessions-routes";
+import { handleWorkflowRoutes } from "./management/workflow-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -240,6 +241,7 @@ export async function handleManagementAPI(
     ??     (await handleSkillsRoutes(ctx))
     ??     (await handleMcpRoutes(ctx))
     ??     (await handleSessionsRoutes(ctx))
+    ??     (await handleWorkflowRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleCloudSyncRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))

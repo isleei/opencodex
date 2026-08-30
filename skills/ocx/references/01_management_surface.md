@@ -316,6 +316,174 @@ JSON mode: `payload`.
 
 - Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.
 
+### `ocx skills list`
+
+List all discovered skills across central store and agent symlinks.
+
+| Method | Route |
+|---|---|
+| GET | `/api/skills` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--status` | string | active | disabled | all |
+| `--agent` | string | all | claude | codex | project |
+| `--search` | string | Search query across name, description, and tags. |
+| `--tags` | string | Comma-separated tag filter. |
+| `--json` | boolean | Emit the skills catalog as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills view`
+
+Inspect a skill's frontmatter metadata and markdown instructions.
+
+| Method | Route |
+|---|---|
+| GET | `/api/skills/{name}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--raw` | boolean | Print verbatim SKILL.md markdown with YAML frontmatter. |
+| `--json` | boolean | Emit skill metadata and content as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills trash`
+
+List all deleted skills recoverable from trash store.
+
+| Method | Route |
+|---|---|
+| GET | `/api/skills/trash` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit trash records as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp list`
+
+List configured MCP servers across all supported clients.
+
+| Method | Route |
+|---|---|
+| GET | `/api/mcp` |
+| GET | `/api/mcp/{client}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Filter by client (all | claude-desktop | claude-code | codex | antigravity). |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit MCP server definitions as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp get`
+
+Inspect an MCP server configuration.
+
+| Method | Route |
+|---|---|
+| GET | `/api/mcp/{client}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Target client identifier. |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit server detail as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx sessions list`
+
+List all discovered sessions across agents (Codex, AGY, Claude Code, Grok).
+
+| Method | Route |
+|---|---|
+| GET | `/api/sessions` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--agent` | string | all | codex | agy | claude | grok |
+| `--status` | string | all | active | archived |
+| `--search` | string | Filter sessions by title, prompt or modified files. |
+| `--limit` | number | Maximum sessions to return (default 50). |
+| `--json` | boolean | Emit sessions as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx sessions view`
+
+Inspect a session's turns, modified files, and token statistics.
+
+| Method | Route |
+|---|---|
+| GET | `/api/sessions/{agent}/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit session details as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow list`
+
+List workflow definitions (built-ins plus user files).
+
+| Method | Route |
+|---|---|
+| GET | `/api/workflows` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit definitions as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow show`
+
+Inspect a workflow definition's phases, roles, and gates.
+
+| Method | Route |
+|---|---|
+| GET | `/api/workflows` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the definition as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow runs`
+
+List workflow runs (newest first).
+
+| Method | Route |
+|---|---|
+| GET | `/api/workflows/runs` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit runs as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow status`
+
+Inspect a run: phase timeline, current gate, journal tail.
+
+| Method | Route |
+|---|---|
+| GET | `/api/workflows/runs/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit run details as JSON. |
+
+JSON mode: `payload`.
+
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
@@ -528,8 +696,284 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx skills create`
+
+Create a new skill package in the central store and link it to agents.
+
+| Method | Route |
+|---|---|
+| POST | `/api/skills` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--description` | string | Intent summary and trigger description. |
+| `--tags` | string | Comma-separated tags for search and categorization. |
+| `--content` | string | Markdown body for SKILL.md. |
+| `--link` | string | Comma-separated target agents (claude, codex, project). |
+| `--json` | boolean | Emit created skill detail as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills edit`
+
+Update an existing skill's frontmatter metadata or markdown content.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/skills/{name}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--description` | string | Updated description string. |
+| `--tags` | string | Updated comma-separated tags. |
+| `--content` | string | Updated markdown body. |
+| `--json` | boolean | Emit updated skill detail as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills toggle`
+
+Enable or disable a skill globally or for a specific agent.
+
+| Method | Route |
+|---|---|
+| POST | `/api/skills/{name}/toggle` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--enable` | boolean | Enable the skill. |
+| `--disable` | boolean | Disable the skill. |
+| `--agent` | string | Optional agent target (claude | codex | all). |
+| `--json` | boolean | Emit toggle status as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills delete`
+
+Delete a skill safely (moves to trash store and cleans up symlinks).
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/skills/{name}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--yes` | boolean | Required confirmation flag. |
+| `--permanent` | boolean | Permanently delete without moving to trash. |
+| `--json` | boolean | Emit deletion result as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills sync`
+
+Synchronize, deduplicate, and establish symlinks across all coding agents.
+
+| Method | Route |
+|---|---|
+| POST | `/api/skills/sync` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--dry-run` | boolean | Simulate sync and deduplication without modifying disk. |
+| `--migrate` | boolean | Migrate unlinked client skills into central store. |
+| `--json` | boolean | Emit sync results and migration statistics as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx skills restore`
+
+Restore a deleted skill from trash and recreate client symlinks.
+
+| Method | Route |
+|---|---|
+| POST | `/api/skills/trash/restore` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit restore outcome as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp add`
+
+Add a new MCP server definition to a client configuration.
+
+| Method | Route |
+|---|---|
+| POST | `/api/mcp/{client}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Target client identifier. |
+| `--command` | string | Command/executable for stdio transport. |
+| `--args` | string | Comma-separated command line arguments. |
+| `--env` | string | Comma-separated KEY=VALUE pairs. |
+| `--cwd` | string | Working directory for execution. |
+| `--url` | string | Remote SSE/HTTP server URL. |
+| `--scope` | string | global | project |
+| `--overwrite` | boolean | Overwrite existing definition if present. |
+| `--json` | boolean | Emit created server definition as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp edit`
+
+Update an existing MCP server configuration in place.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/mcp/{client}/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Target client identifier. |
+| `--command` | string | Updated executable for stdio transport. |
+| `--args` | string | Updated comma-separated arguments. |
+| `--env` | string | Updated KEY=VALUE environment pairs. |
+| `--cwd` | string | Updated working directory. |
+| `--url` | string | Updated remote server URL. |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit updated server definition as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp toggle`
+
+Enable or disable an MCP server in a client configuration.
+
+| Method | Route |
+|---|---|
+| POST | `/api/mcp/{client}/{id}/toggle` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Target client identifier. |
+| `--enable` | boolean | Enable the server. |
+| `--disable` | boolean | Disable the server. |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit updated toggle state as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp delete`
+
+Remove an MCP server from a client configuration.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/mcp/{client}/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Target client identifier. |
+| `--yes` | boolean | Required confirmation flag. |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit deletion message as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx mcp clone`
+
+Clone / export an MCP server definition across different clients.
+
+| Method | Route |
+|---|---|
+| POST | `/api/mcp/clone` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--from` | string | Source client format. |
+| `--to` | string | Target client format. |
+| `--new-id` | string | Optional renamed server ID on target. |
+| `--overwrite` | boolean | Overwrite target if ID exists. |
+| `--scope` | string | global | project |
+| `--json` | boolean | Emit cloned server definition as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx sessions handoff`
+
+Generate handoff context and dispatch execution to target agent.
+
+| Method | Route |
+|---|---|
+| POST | `/api/sessions/{agent}/{id}/handoff` |
+| POST | `/api/sessions/{agent}/{id}/dispatch` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--to` | string | Target agent (codex | agy | claude). |
+| `--execute` | boolean | Automatically launch target agent execution. |
+| `--strategy` | string | smart | full (default: smart). |
+| `--instructions` | string | Custom user instructions to append. |
+| `--json` | boolean | Emit handoff / dispatch result as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow run`
+
+Start a run of a workflow definition.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/runs` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--title` | string | Human title for the run. |
+| `--set` | string | Pin a role to a model ref (repeatable, role=model-ref). |
+| `--workspace` | string | Working directory for agent-mode phases. |
+| `--json` | boolean | Emit the started run as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow advance`
+
+Complete the current phase and move to the next one.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/runs/{id}/advance` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--outputs` | string | Text output to record for the completed phase. |
+| `--json` | boolean | Emit the updated task as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow gate`
+
+Approve or reject the gate the run is waiting at.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/runs/{id}/gate` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--note` | string | Optional approval/rejection note. |
+| `--json` | boolean | Emit the updated task as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx workflow abort`
+
+Abort a workflow run.
+
+| Method | Route |
+|---|---|
+| POST | `/api/workflows/runs/{id}/abort` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--reason` | string | Optional abort reason. |
+| `--json` | boolean | Emit the updated task as JSON. |
+
+JSON mode: `payload`.
+
 ## Counts
 
-- declared capabilities: 29
-- of those, state-changing: 11
+- declared capabilities: 56
+- of those, state-changing: 27
 - head-resolved invocations: 2

@@ -1,6 +1,6 @@
 # Plan: Codex-Led Workflow Engine (`ocx workflow`)
 
-Status: OPEN (design, pre-implementation)
+Status: OPEN — W1 implemented (engine, store, REST, CLI)
 Created: 2026-08-30
 Reference: [CCG — fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow)
 
@@ -141,12 +141,23 @@ parsed out of TOML (prompt-layers rule #1 applies to the projection).
 - E2E: scripted Codex run against a sandboxed `CODEX_HOME`; gate requires an explicit
   operator action; compaction-recovery (state re-injected after a truncated transcript).
 
-## 10. Open questions
+## 10. Decisions (operator-approved 2026-08-30)
 
-1. Default `mode` per phase — proposal: `plan`/`report` chat, `implement`/`verify`
-   agent, `review` chat with an opt-in `mode: "agent"` when repo access is needed.
-2. Gate approval UX — proposal: both CLI (`ocx workflow gate approve`) and dashboard
-   button; GUI is primary.
-3. Dual-model review output — render both verdicts verbatim (CCG's "model panels":
-   disagreement is the finding) or synthesize a merged verdict? Proposal: verbatim +
-   a synthesized diff-of-opinions line.
+1. Default `mode` per phase: `plan`/`report` chat, `implement`/`verify` agent,
+   `review` chat with an opt-in `mode: "agent"` when repo access is needed.
+2. Gate approval UX: both CLI (`ocx workflow gate approve`) and dashboard button;
+   GUI is primary (W3).
+3. Dual-model review output: verbatim side-by-side verdicts plus a synthesized
+   diff-of-opinions line (W4).
+
+## 11. W1 implementation notes
+
+- `src/workflow/`: `types.ts`, `builtins.ts` (feature-delivery, review-audit,
+  debug-investigate — roles not concrete models), `store.ts` (definitions shadow
+  built-ins by id; task.json + journal.jsonl per run), `engine.ts` (state machine;
+  arriving at a gate moves `phaseIndex` onto the gate itself).
+- REST `/api/workflows*`, CLI `ocx workflow list|show|run|runs|status|advance|gate|abort`,
+  wired through registry/dispatch/help/capabilities/route-registry; skill surface
+  regenerated.
+- Engine rule learned in testing: every journal append must thread the store's
+  baseDir, or test isolation silently writes into the real config dir.

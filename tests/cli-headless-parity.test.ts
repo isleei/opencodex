@@ -283,6 +283,12 @@ describe("headless GUI parity CLI", () => {
       ["/api/cloud-sync", "ocx sync-cloud"],
       ["/api/clients", "ocx clients"],
       ["/api/pi", "ocx pi"],
+      // Session hub, skills/MCP management, and workflow engine endpoints mirror
+      // their CLI suites one-to-one (ocx sessions / ocx skills / ocx mcp / ocx workflow).
+      ["/api/sessions", "ocx sessions"],
+      ["/api/skills", "ocx skills"],
+      ["/api/mcp", "ocx mcp"],
+      ["/api/workflows", "ocx workflow"],
     ];
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);

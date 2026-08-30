@@ -738,6 +738,14 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleSessionsCommand } = await import("./sessions");
     return await handleSessionsCommand(deps.args.slice(1));
   },
+  workflow: async deps => {
+    const { handleWorkflowCommand } = await import("./workflow");
+    return await handleWorkflowCommand(deps.args.slice(1));
+  },
+  workflows: async deps => {
+    const { handleWorkflowCommand } = await import("./workflow");
+    return await handleWorkflowCommand(deps.args.slice(1));
+  },
   session: async deps => {
     const { handleSessionsCommand } = await import("./sessions");
     return await handleSessionsCommand(deps.args.slice(1));
