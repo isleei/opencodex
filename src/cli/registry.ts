@@ -343,6 +343,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "runs [--json]                    List runs (newest first).",
       "status <task-id> [--json]        Inspect a run: phase timeline, gate, journal tail.",
       "advance <task-id> [--outputs t]  Complete the current phase and move on.",
+      "execute <task-id> [--auto]       Execute the current phase; --auto runs to the next gate.",
       "gate <task-id> <approve|reject>  Resolve the gate the run is waiting at.",
       "abort <task-id> [--reason t]     Abort a run.",
     ],

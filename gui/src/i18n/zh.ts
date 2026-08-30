@@ -2493,6 +2493,8 @@ export const zh: Record<TKey, string> = {
   "models.aliasStale": "过期",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "会话管理",
+
+  "nav.workflows": "工作流",
   "sessions.title": "跨 Agent 会话中心",
   "sessions.subtitle": "发现、查看并跨 OpenAI Codex、Google Antigravity (AGY)、Claude Code 与 Grok Build 同步执行活跃 Agent 会话。",
   "sessions.refresh": "刷新",

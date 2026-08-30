@@ -11,7 +11,7 @@
  * - POST /api/workflows/runs/{id}/abort        → { reason? }
  */
 
-import { jsonResponse } from "../auth-cors";
+import { configuredAdminAuthToken, jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import {
@@ -24,7 +24,17 @@ import {
   startRun,
 } from "../../workflow/engine";
 import { listDefinitions, listTasks, saveDefinition } from "../../workflow/store";
+import { isExecuting as kickIsExecuting, kickExecution } from "../../workflow/executor";
+import { syncWorkflowLayer } from "../../workflow/inject";
+import { ensureWorkflowSkill } from "../../workflow/skill";
 import type { WorkflowDefinition } from "../../workflow/types";
+
+function executorOptions(ctx: ManagementContext) {
+  return {
+    baseUrl: `http://127.0.0.1:${ctx.config.port}`,
+    adminToken: configuredAdminAuthToken() ?? "",
+  };
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -94,14 +104,19 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       : undefined;
     try {
       const task = startRun({ workflowId, title, workspaceDir, roleOverrides });
-      return jsonResponse({ ok: true, task }, 200, req, ctx.config);
+      ensureWorkflowSkill();
+      const auto = body.auto === true;
+      let execution: { started: boolean; reason?: string } = { started: false };
+      if (auto) execution = kickExecution(task.id, { ...executorOptions(ctx), auto: true });
+      syncWorkflowLayer();
+      return jsonResponse({ ok: true, task, execution }, 200, req, ctx.config);
     } catch (error) {
       return errorResponse(error, req, ctx.config);
     }
   }
 
   // 5. /api/workflows/runs/{id}[/action]
-  const match = url.pathname.match(/^\/api\/workflows\/runs\/([^/]+)(?:\/(advance|gate|abort))?$/);
+  const match = url.pathname.match(/^\/api\/workflows\/runs\/([^/]+)(?:\/(advance|gate|abort|execute))?$/);
   if (match) {
     const taskId = decodeURIComponent(match[1]);
     const action = match[2];
@@ -112,7 +127,7 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       if (!run) {
         return jsonResponse({ error: `unknown run '${taskId}'`, code: "run_not_found" }, 404, req, ctx.config);
       }
-      return jsonResponse(run, 200, req, ctx.config);
+      return jsonResponse({ ...run, executing: kickIsExecuting(taskId) }, 200, req, ctx.config);
     }
 
     if (req.method !== "POST") return null;
@@ -124,7 +139,9 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
     try {
       if (action === "advance") {
         const outputs = typeof body.outputs === "string" ? body.outputs : undefined;
-        return jsonResponse({ ok: true, task: advanceRun(taskId, { outputs }) }, 200, req, ctx.config);
+        const task = advanceRun(taskId, { outputs });
+        syncWorkflowLayer();
+        return jsonResponse({ ok: true, task }, 200, req, ctx.config);
       }
       if (action === "gate") {
         if (body.action !== "approve" && body.action !== "reject") {
@@ -136,10 +153,21 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
           );
         }
         const task = body.action === "approve" ? approveGate(taskId, { note }) : rejectGate(taskId, { note });
+        syncWorkflowLayer();
         return jsonResponse({ ok: true, task }, 200, req, ctx.config);
       }
+      if (action === "execute") {
+        const auto = body.auto === true;
+        const kicked = kickExecution(taskId, { ...executorOptions(ctx), auto });
+        if (!kicked.started) {
+          return jsonResponse({ ok: true, executing: true, started: false, reason: kicked.reason }, 200, req, ctx.config);
+        }
+        return jsonResponse({ ok: true, started: true, auto }, 202, req, ctx.config);
+      }
       if (action === "abort") {
-        return jsonResponse({ ok: true, task: abortRun(taskId, { reason: note }) }, 200, req, ctx.config);
+        const task = abortRun(taskId, { reason: note });
+        syncWorkflowLayer();
+        return jsonResponse({ ok: true, task }, 200, req, ctx.config);
       }
     } catch (error) {
       return errorResponse(error, req, ctx.config);

@@ -51,6 +51,12 @@ export type WorkflowTaskStatus = "running" | "awaiting_gate" | "completed" | "ab
 
 export type WorkflowPhaseStatus = "pending" | "in_progress" | "done" | "rejected" | "skipped";
 
+export interface WorkflowPhaseTokens {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface WorkflowPhaseState {
   id: string;
   status: WorkflowPhaseStatus;
@@ -60,6 +66,10 @@ export interface WorkflowPhaseState {
   completedAt?: number;
   /** Text output supplied when the phase was advanced past. */
   outputs?: string;
+  /** Set when automated execution failed; the phase stays in_progress for a retry. */
+  error?: string;
+  /** Token usage captured from an automated chat execution. */
+  tokens?: WorkflowPhaseTokens;
 }
 
 export interface WorkflowGateState {

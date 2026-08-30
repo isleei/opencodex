@@ -34,6 +34,7 @@ const USAGE = `Usage:
   ocx workflow runs [--json]
   ocx workflow status <task-id> [--json]
   ocx workflow advance <task-id> [--outputs <text>] [--json]
+  ocx workflow execute <task-id> [--auto] [--json]
   ocx workflow gate <task-id> <approve|reject> [--note <text>] [--json]
   ocx workflow abort <task-id> [--reason <text>] [--json]`;
 
@@ -155,6 +156,7 @@ function collectSetFlags(args: string[]): Record<string, string> {
 async function run(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
+  const auto = takeFlag(args, "--auto");
   const title = takeOption(args, "--title");
   const workspace = takeOption(args, "--workspace");
   const roleOverrides = collectSetFlags(args);
@@ -168,7 +170,7 @@ async function run(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workflowId, title, workspaceDir: workspace, roleOverrides }),
+      body: JSON.stringify({ workflowId, title, workspaceDir: workspace, roleOverrides, auto }),
     },
     deps,
   );
@@ -250,6 +252,32 @@ async function advance(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   ]);
 }
 
+async function execute(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const auto = takeFlag(args, "--auto");
+  const taskId = args.shift();
+  rejectArgs(args, USAGE);
+  if (!taskId) throw new CliUsageError("missing task id", USAGE);
+
+  const result = await runtimeRequest<{ ok: boolean; started?: boolean; reason?: string }>(
+    `/api/workflows/runs/${encodeURIComponent(taskId)}/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto }),
+    },
+    deps,
+  );
+  printData(result, wantsJson, [
+    result.started
+      ? auto
+        ? "Pipeline started: phases will execute and auto-advance until the next gate, a manual phase, or completion."
+        : "Phase execution started. Check progress with: ocx workflow status " + taskId
+      : `Not started: ${result.reason ?? "unknown reason"}`,
+  ]);
+}
+
 async function gate(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -314,6 +342,7 @@ export async function handleWorkflowCommand(argv: string[], deps: RuntimeApiDeps
     else if (sub === "runs" || sub === "status-list") await runs(rest, deps);
     else if (sub === "status") await status(rest, deps);
     else if (sub === "advance" || sub === "done") await advance(rest, deps);
+    else if (sub === "execute" || sub === "run-phase") await execute(rest, deps);
     else if (sub === "gate") await gate(rest, deps);
     else if (sub === "abort" || sub === "stop") await abort(rest, deps);
     else throw new CliUsageError(`unknown workflow subcommand: "${sub}"`, USAGE);

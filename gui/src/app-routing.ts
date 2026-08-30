@@ -10,6 +10,7 @@ export type Page =
   | "subagents"
   | "skills"
   | "sessions"
+  | "workflows"
   | "logs"
   | "usage"
   | "storage"
@@ -26,6 +27,7 @@ export const VALID_PAGES = new Set<Page>([
   "subagents",
   "skills",
   "sessions",
+  "workflows",
   "logs",
   "usage",
   "storage",

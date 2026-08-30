@@ -2470,6 +2470,8 @@ export const de: Record<TKey, string> = {
   "models.aliasStale": "veraltet",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "Sitzungen",
+
+  "nav.workflows": "Workflows",
   "sessions.title": "Cross-Agent Sitzungs-Hub",
   "sessions.subtitle": "Entdecken, prüfen und synchronisieren Sie aktive Agenten-Sitzungen zwischen OpenAI Codex, Google Antigravity (AGY), Claude Code und Grok Build.",
   "sessions.refresh": "Aktualisieren",

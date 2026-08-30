@@ -752,6 +752,7 @@ export const CAPABILITIES: readonly Capability[] = [
       { name: "--title", value: "string", required: true, summary: "Human title for the run." },
       { name: "--set", value: "string", summary: "Pin a role to a model ref (repeatable, role=model-ref)." },
       { name: "--workspace", value: "string", summary: "Working directory for agent-mode phases." },
+      { name: "--auto", value: "boolean", summary: "Execute phases automatically until the next gate or completion." },
       { name: "--json", value: "boolean", summary: "Emit the started run as JSON." },
     ],
     mutates: true,
@@ -780,6 +781,17 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [
       { name: "--outputs", value: "string", summary: "Text output to record for the completed phase." },
       { name: "--json", value: "boolean", summary: "Emit the updated task as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+  },
+  {
+    command: ["workflow", "execute"],
+    summary: "Execute the current phase (chat via the proxy, agent via codex exec); --auto keeps going.",
+    routes: [{ method: "POST", path: "/api/workflows/runs/{id}/execute" }],
+    flags: [
+      { name: "--auto", value: "boolean", summary: "Keep executing and advancing until the next gate, manual phase, or completion." },
+      { name: "--json", value: "boolean", summary: "Emit the receipt as JSON." },
     ],
     mutates: true,
     json: "payload",

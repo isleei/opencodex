@@ -2457,6 +2457,8 @@ export const fr: Record<TKey, string> = {
   "models.aliasStale": "obsolète",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "Sessions",
+
+  "nav.workflows": "Workflows",
   "sessions.title": "Hub de Sessions Multi-Agents",
   "sessions.subtitle": "Découvrez, inspectez et synchronisez les sessions d'agents actives entre OpenAI Codex, Google Antigravity (AGY), Claude Code et Grok Build.",
   "sessions.refresh": "Actualiser",

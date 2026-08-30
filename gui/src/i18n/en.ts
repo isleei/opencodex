@@ -2504,6 +2504,8 @@ export const en = {
   "models.aliasStale": "stale",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "Sessions",
+
+  "nav.workflows": "Workflows",
   "sessions.title": "Cross-Agent Session Hub",
   "sessions.subtitle": "Discover, inspect, and synchronize active agent sessions across OpenAI Codex, Google Antigravity (AGY), Claude Code, and Grok Build.",
   "sessions.refresh": "Refresh",

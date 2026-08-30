@@ -2491,6 +2491,8 @@ export const ja: Record<TKey, string> = {
   "models.aliasStale": "古い",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "セッション",
+
+  "nav.workflows": "ワークフロー",
   "sessions.title": "クロスエージェント セッションハブ",
   "sessions.subtitle": "OpenAI Codex、Google Antigravity (AGY)、Claude Code、Grok Build 間のアクティブなセッションを検出し、同期実行します。",
   "sessions.refresh": "更新",

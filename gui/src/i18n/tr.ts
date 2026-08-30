@@ -2494,6 +2494,8 @@ export const tr: Record<TKey, string> = {
   "models.aliasStale": "eski",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "Oturumlar",
+
+  "nav.workflows": "İş Akışları",
   "sessions.title": "Ajanlar Arası Oturum Merkezi",
   "sessions.subtitle": "OpenAI Codex, Google Antigravity (AGY), Claude Code ve Grok Build arasındaki aktif ajan oturumlarını keşfedin, inceleyin ve senkronize edin.",
   "sessions.refresh": "Yenile",

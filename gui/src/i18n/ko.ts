@@ -2492,6 +2492,8 @@ export const ko: Record<TKey, string> = {
   "models.aliasStale": "오래됨",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "세션 관리",
+
+  "nav.workflows": "워크플로",
   "sessions.title": "크로스 에이전트 세션 허브",
   "sessions.subtitle": "OpenAI Codex, Google Antigravity (AGY), Claude Code, Grok Build 간의 활성 세션을 검색, 검사 및 동기화 실행합니다.",
   "sessions.refresh": "새로고침",

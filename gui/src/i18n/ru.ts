@@ -2493,6 +2493,8 @@ export const ru: Record<TKey, string> = {
   "models.aliasStale": "устарел",
   "nav.skills": "Skills & MCP",
   "nav.sessions": "Сессии",
+
+  "nav.workflows": "Воркфлоу",
   "sessions.title": "Центр сессий мульти-агентов",
   "sessions.subtitle": "Обнаруживайте, проверяйте и синхронизируйте активные сессии агентов между OpenAI Codex, Google Antigravity (AGY), Claude Code и Grok Build.",
   "sessions.refresh": "Обновить",
