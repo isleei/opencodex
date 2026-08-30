@@ -227,6 +227,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/usage/ingest", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/debug", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/storage/cleanup-policy", module: "server/management/logs-usage-routes", mutates: true },
+  // server/management/mcp-routes
+  { method: "GET", path: "/api/mcp", module: "server/management/mcp-routes", mutates: false },
+  { method: "POST", path: "/api/mcp/clone", module: "server/management/mcp-routes", mutates: true },
   // server/management/model-routes
   { method: "GET", path: "/api/aliases", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/catalog", module: "server/management/model-routes", mutates: false },
@@ -300,6 +303,14 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: false },
   { method: "GET", path: "/api/update/badge", module: "server/management/sidebar-routes", mutates: false },
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
+  // server/management/sessions-routes
+  { method: "GET", path: "/api/sessions", module: "server/management/sessions-routes", mutates: false },
+  // server/management/skills-routes
+  { method: "GET", path: "/api/skills", module: "server/management/skills-routes", mutates: false },
+  { method: "GET", path: "/api/skills/trash", module: "server/management/skills-routes", mutates: false },
+  { method: "POST", path: "/api/skills", module: "server/management/skills-routes", mutates: true },
+  { method: "POST", path: "/api/skills/sync", module: "server/management/skills-routes", mutates: true },
+  { method: "POST", path: "/api/skills/trash/restore", module: "server/management/skills-routes", mutates: true },
   // server/management/storage-log-guard-routes
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
   { method: "POST", path: "/api/storage/codex-logs/compact", module: "server/management/storage-log-guard-routes", mutates: true },
@@ -310,7 +321,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (18). ---
+  // --- Routes an equality scan of their own file cannot see (27). ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },
@@ -325,6 +336,18 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/providers/{provider}/model-aliases", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "DELETE", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
+  { method: "GET", path: "/api/mcp/{client}", module: "server/management/mcp-routes", mutates: false, mechanism: "regex" },
+  { method: "POST", path: "/api/mcp/{client}", module: "server/management/mcp-routes", mutates: true, mechanism: "regex" },
+  { method: "PUT", path: "/api/mcp/{client}/{id}", module: "server/management/mcp-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/mcp/{client}/{id}/toggle", module: "server/management/mcp-routes", mutates: true, mechanism: "regex" },
+  { method: "DELETE", path: "/api/mcp/{client}/{id}", module: "server/management/mcp-routes", mutates: true, mechanism: "regex" },
+  { method: "GET", path: "/api/skills/{name}", module: "server/management/skills-routes", mutates: false, mechanism: "regex" },
+  { method: "PUT", path: "/api/skills/{name}", module: "server/management/skills-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/skills/{name}/toggle", module: "server/management/skills-routes", mutates: true, mechanism: "regex" },
+  { method: "DELETE", path: "/api/skills/{name}", module: "server/management/skills-routes", mutates: true, mechanism: "regex" },
+  { method: "GET", path: "/api/sessions/{agent}/{id}", module: "server/management/sessions-routes", mutates: false, mechanism: "regex" },
+  { method: "POST", path: "/api/sessions/{agent}/{id}/handoff", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/sessions/{agent}/{id}/dispatch", module: "server/management/sessions-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/lab/subjects/{id}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/events/{id}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/artifacts/{digest}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },

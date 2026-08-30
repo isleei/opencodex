@@ -726,6 +726,22 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
   },
+  skills: async deps => {
+    const { handleSkillsCommand } = await import("./skills");
+    return await handleSkillsCommand(deps.args.slice(1));
+  },
+  mcp: async deps => {
+    const { handleMcpCommand } = await import("./mcp");
+    return await handleMcpCommand(deps.args.slice(1));
+  },
+  sessions: async deps => {
+    const { handleSessionsCommand } = await import("./sessions");
+    return await handleSessionsCommand(deps.args.slice(1));
+  },
+  session: async deps => {
+    const { handleSessionsCommand } = await import("./sessions");
+    return await handleSessionsCommand(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

@@ -95,6 +95,12 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "nav.api",
   "nav.claude",
   "nav.grok",
+  "nav.skills",
+  // Skills and MCP client brand names
+  "skillsMcp.mcp.client.claudeDesktop",
+  "skillsMcp.mcp.client.claudeCode",
+  "skillsMcp.mcp.client.codex",
+  "skillsMcp.mcp.client.antigravity",
   // Other short identifiers, commands, and product names kept in English
   "api.clientConfig.clientOpencode",
   "api.clientConfig.clientPi",

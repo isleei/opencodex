@@ -12,9 +12,11 @@ import CodexSet from "./pages/CodexSet";
 import Clients from "./pages/Clients";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
+import SkillsMcp from "./pages/SkillsMcp";
+import Sessions from "./pages/Sessions";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCloud, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconSparkles, IconTerminal, IconList, IconActivity, IconHardDrive, IconCloud, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -34,6 +36,8 @@ const PAGE_TKEY: Record<Page, TKey> = {
   providers: "nav.providers",
   models: "nav.models",
   subagents: "nav.subagents",
+  skills: "nav.skills",
+  sessions: "nav.sessions",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -66,6 +70,8 @@ const NAV: NavEntry[] = [
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
+  { id: "skills", tkey: "nav.skills", Icon: IconSparkles },
+  { id: "sessions", tkey: "nav.sessions", Icon: IconTerminal },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
@@ -339,6 +345,8 @@ export default function App() {
             {page === "providers" && <Providers apiBase={API_BASE} />}
             {page === "models" && <Models key={API_BASE} apiBase={API_BASE} restartEpoch={codexRestartEpoch} />}
             {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
+            {page === "skills" && <SkillsMcp apiBase={API_BASE} />}
+            {page === "sessions" && <Sessions apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
             {page === "usage" && <Usage apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}

@@ -8,6 +8,8 @@ export type Page =
   | "providers"
   | "models"
   | "subagents"
+  | "skills"
+  | "sessions"
   | "logs"
   | "usage"
   | "storage"
@@ -22,6 +24,8 @@ export const VALID_PAGES = new Set<Page>([
   "providers",
   "models",
   "subagents",
+  "skills",
+  "sessions",
   "logs",
   "usage",
   "storage",
@@ -66,6 +70,11 @@ export function readPageFromHash(hash?: string): Page {
 export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] as const;
 
 /**
+ * Skills owns two sub-tabs: the Skills catalog and MCP Server configuration.
+ */
+export const SKILLS_TAB_HASHES = ["skills/skills", "skills/mcp"] as const;
+
+/**
  * Models owns four tabs: the catalog, Combos, Routing, and Compatibility. The catalog
  * is the bare `#models`, so it has no suffix entry here - same convention Dashboard
  * uses for Overview and Logs uses for the log list.
@@ -107,6 +116,7 @@ export const INTEGRATION_TAB_HASHES = [
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
+    || (page === "skills" && (SKILLS_TAB_HASHES as readonly string[]).includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
     || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))

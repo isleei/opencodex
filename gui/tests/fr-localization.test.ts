@@ -38,6 +38,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "common.ok",
   "nav.api",
   "nav.grok",
+  "nav.sessions",
   "grok.title",
   "claude.pageTitle",
   "claude.tabCode",
@@ -175,6 +176,20 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "lab.observationCount",
   "lab.verdictCount",
   "lab.detailObservations",
+  // Skills and MCP Proper Nouns and loanwords
+  "nav.skills",
+  "skillsMcp.tab.skills",
+  "skillsMcp.skills.colDescription",
+  "skillsMcp.skills.colTags",
+  "skillsMcp.skills.colActions",
+  "skillsMcp.skills.storageCentral",
+  "skillsMcp.skills.modal.fieldVersion",
+  "skillsMcp.skills.trash.colAction",
+  "skillsMcp.mcp.client.claudeDesktop",
+  "skillsMcp.mcp.client.claudeCode",
+  "skillsMcp.mcp.client.codex",
+  "skillsMcp.mcp.client.antigravity",
+  "skillsMcp.mcp.modal.fieldArgs",
 ]);
 
 function placeholders(value: string): string[] {

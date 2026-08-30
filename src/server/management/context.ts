@@ -16,7 +16,16 @@ import type {
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
 
+import type { SkillsDirectoryConfig } from "../../skills/types";
+import type { CustomPathMap, McpConfigManager } from "../../mcp/config-manager";
+
 export interface ManagementApiDeps {
+  /** Test injection for Skills directory locations. */
+  skillsConfig?: SkillsDirectoryConfig;
+  /** Test injection for MCP configuration file paths. */
+  mcpCustomPaths?: CustomPathMap;
+  /** Test injection for custom McpConfigManager instance. */
+  mcpConfigManager?: McpConfigManager;
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
   platform?: NodeJS.Platform;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;

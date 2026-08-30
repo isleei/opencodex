@@ -74,6 +74,9 @@ import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
+import { handleSkillsRoutes } from "./management/skills-routes";
+import { handleMcpRoutes } from "./management/mcp-routes";
+import { handleSessionsRoutes } from "./management/sessions-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -234,6 +237,9 @@ export async function handleManagementAPI(
     ??     (await handleClientsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
+    ??     (await handleSkillsRoutes(ctx))
+    ??     (await handleMcpRoutes(ctx))
+    ??     (await handleSessionsRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleCloudSyncRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
