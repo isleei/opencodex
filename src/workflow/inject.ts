@@ -11,7 +11,8 @@
  * run transition. Disable entirely with OCX_WORKFLOW_INJECT=off.
  */
 
-import { readPromptLayers, writeCustomLayers, type CustomLayer, type Paths } from "../codex/prompt-layers";
+import { existsSync, readFileSync } from "node:fs";
+import { activeConfigPath, inspectOwnership, readPromptLayers, writeCustomLayers, type CustomLayer, type Paths } from "../codex/prompt-layers";
 import { listTasks } from "./store";
 import type { WorkflowTask } from "./types";
 
@@ -51,11 +52,14 @@ export function syncWorkflowLayer(baseDir?: string, paths?: Paths): { ok: boolea
   if (injectionDisabled()) return { ok: true, detail: "injection disabled" };
   try {
     const snapshot = readPromptLayers(paths);
-    // An absent config.toml is writable (the projection creates it); only a foreign
-    // developer_instructions line or unresolved drift blocks the write.
-    const writable = !snapshot.configExists || snapshot.developerInstructionsOwned;
+    // Writable when the config is absent (the projection creates it), when ocx owns
+    // the developer_instructions line, or when there is no such line at all. Only a
+    // FOREIGN line or unresolved drift blocks the write.
+    const configPath = activeConfigPath(paths);
+    const ownership = inspectOwnership(existsSync(configPath) ? readFileSync(configPath, "utf8") : null);
+    const writable = ownership.state === "owned" || ownership.state === "absent";
     if (!writable || snapshot.drift) {
-      return { ok: false, detail: `prompt layers not writable (exists=${snapshot.configExists}, owned=${snapshot.developerInstructionsOwned}, drift=${snapshot.drift ?? "none"})` };
+      return { ok: false, detail: `prompt layers not writable (ownership=${ownership.state}${"line" in ownership && ownership.line ? ` at line ${ownership.line}` : ""}, drift=${snapshot.drift ?? "none"})` };
     }
     const active = listTasks(baseDir).find(t => t.status === "running" || t.status === "awaiting_gate");
     const body = active ? breadcrumbFor(active) : null;
