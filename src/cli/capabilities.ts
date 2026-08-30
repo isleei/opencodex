@@ -728,6 +728,15 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
   },
   {
+    command: ["acp"],
+    summary: "Run ocx as an ACP coding agent over stdio for ACP-compatible editors.",
+    routes: [],
+    flags: [{ name: "--model", value: "string", summary: "Pin the routed model ref for every session." }],
+    mutates: false,
+    json: "none",
+    bannerLines: ["ocx acp [--model <ref>]     ACP agent endpoint for Zed/JetBrains/Neovim"],
+  },
+  {
     command: ["workflow", "go"],
     summary: "One-command start: classify the task, bind the default model, execute to the first gate.",
     routes: [{ method: "POST", path: "/api/workflows/go" }],

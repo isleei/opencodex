@@ -332,6 +332,16 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx sessions.",
   },
   {
+    name: "acp",
+    usage: "ocx acp [--model <provider/model|combo/id|policy/id>]",
+    summary: "Run ocx as an ACP coding agent (Agent Client Protocol over stdio).",
+    details: [
+      "Speaks the open Agent Client Protocol so ACP-compatible editors (Zed, JetBrains,",
+      "Neovim, ...) can drive ocx as the coding agent with any routed model.",
+      "Register it as a custom agent: command `ocx`, args `acp --model <ref>`.",
+    ],
+  },
+  {
     name: "workflow",
     aliases: ["workflows"],
     usage: "ocx workflow <list|show|run|runs|status|advance|gate|abort> ...",

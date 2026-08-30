@@ -119,6 +119,19 @@ ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Cod
 commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
 when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
 
+### For editors (ACP)
+
+```bash
+ocx acp [--model <provider/model|combo/id|policy/id>]
+```
+
+Runs ocx as an [Agent Client Protocol](https://agentclientprotocol.com) coding
+agent over stdio — register it as a custom agent in any ACP-compatible editor
+(Zed, JetBrains, Neovim, …): command `ocx`, args `acp --model <ref>`. Sessions
+execute through `codex exec` routed to your configured providers; message,
+tool-call, and reasoning updates stream back over ACP. No vendor credentials
+are touched — the model layer is entirely your own ocx routing.
+
 > **Agents installing or running opencodex:** read
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
 > star this repository — that is the user's decision, never an agent's. The CLI suppresses the

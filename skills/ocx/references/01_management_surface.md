@@ -428,6 +428,18 @@ Inspect a session's turns, modified files, and token statistics.
 
 JSON mode: `payload`.
 
+### `ocx acp`
+
+Run ocx as an ACP coding agent over stdio for ACP-compatible editors.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Pin the routed model ref for every session. |
+
+JSON mode: `none`.
+
 ### `ocx workflow list`
 
 List workflow definitions (built-ins plus user files).
@@ -1020,6 +1032,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 59
+- declared capabilities: 60
 - of those, state-changing: 30
 - head-resolved invocations: 2

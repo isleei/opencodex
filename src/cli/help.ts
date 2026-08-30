@@ -90,6 +90,7 @@ Usage:
   ocx skills <sub>            Centralized skills store, cross-agent symlinks, and trash
   ocx mcp <sub>               Multi-client MCP configuration, toggling, and cloning
   ocx sessions <sub>          Cross-agent session hub, turns inspect, and handoffs
+  ocx acp                     Run ocx as an ACP agent for editors (Zed, JetBrains, ...)
   ocx workflow <sub>          Codex-led phase workflows with model roles and gates
   ocx help [command]          Show help
   ocx --version | -v          Print version

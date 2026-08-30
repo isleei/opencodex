@@ -61,6 +61,7 @@
     "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
     "@bufbuild/protobuf": "^2.14.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@napi-rs/keyring": "1.3.0",

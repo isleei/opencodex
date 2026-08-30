@@ -738,6 +738,12 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleSessionsCommand } = await import("./sessions");
     return await handleSessionsCommand(deps.args.slice(1));
   },
+  acp: async deps => {
+    const { runAcpCli } = await import("../acp/agent");
+    // Foreground agent loop: blocks until the editor disconnects.
+    await runAcpCli(deps.args.slice(1));
+    return 0;
+  },
   workflow: async deps => {
     const { handleWorkflowCommand } = await import("./workflow");
     return await handleWorkflowCommand(deps.args.slice(1));
