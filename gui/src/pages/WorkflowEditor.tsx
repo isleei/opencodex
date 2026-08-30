@@ -10,6 +10,8 @@ let phaseCounter = 0;
 export interface WorkflowEditorProps {
   /** The draft being edited (may be a copy of a built-in). */
   draft: WorkflowDefinition;
+  /** Routable model refs from the live catalog, offered as datalist suggestions. */
+  modelOptions: string[];
   /** True when the id was set by the caller and must not change (override flow). */
   idLocked?: boolean;
   /** Shown when the draft overrides a built-in definition. */
@@ -22,6 +24,7 @@ export interface WorkflowEditorProps {
 
 export default function WorkflowEditor({
   draft,
+  modelOptions,
   idLocked,
   overridesBuiltin,
   saving,
@@ -97,6 +100,9 @@ export default function WorkflowEditor({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-container workflows-editor-modal" onClick={e => e.stopPropagation()}>
+        <datalist id="ocx-editor-model-refs">
+          {modelOptions.map(ref => <option key={ref} value={ref} />)}
+        </datalist>
         <div className="modal-header">
           <div className="modal-title-row">
             <h3 className="modal-title">{overridesBuiltin ? t("workflows.editor.customize", { id: draft.id }) : idLocked ? t("workflows.editor.edit") : t("workflows.editor.new")}</h3>
@@ -152,6 +158,7 @@ export default function WorkflowEditor({
               <input
                 type="text"
                 className="mono"
+                list="ocx-editor-model-refs"
                 placeholder={t("workflows.editor.defaultsPlaceholder")}
                 value={def.defaults?.[role] ?? ""}
                 onChange={e =>
@@ -197,6 +204,7 @@ export default function WorkflowEditor({
                   <input
                     type="text"
                     className="mono"
+                    list="ocx-editor-model-refs"
                     placeholder={t("workflows.editor.modelRefPlaceholder")}
                     value={phase.modelRef ?? ""}
                     onChange={e => patchPhase(i, { modelRef: e.target.value })}

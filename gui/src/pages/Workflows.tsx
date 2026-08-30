@@ -79,6 +79,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   const [startRoles, setStartRoles] = useState<Record<string, string>>({});
   const [startAuto, setStartAuto] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [editor, setEditor] = useState<{ draft: WorkflowDefinition; idLocked: boolean; overridesBuiltin: boolean } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorErrors, setEditorErrors] = useState<string[] | null>(null);
@@ -121,6 +122,44 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   useEffect(() => {
     void refreshLists();
   }, [refreshLists]);
+
+  // Model catalog for pickers: combos and policy profiles first (virtual ids), then
+  // every enabled provider/model row from /api/models.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [modelsRes, combosRes, profilesRes] = await Promise.all([
+          fetch(`${apiBase}/api/models`),
+          fetch(`${apiBase}/api/combos`).catch(() => null),
+          fetch(`${apiBase}/api/routing-profiles`).catch(() => null),
+        ]);
+        const options: string[] = [];
+        if (combosRes?.ok) {
+          const body = (await combosRes.json()) as { combos?: Array<{ model?: string }> };
+          for (const combo of body.combos ?? []) {
+            if (combo.model) options.push(combo.model);
+          }
+        }
+        if (profilesRes?.ok) {
+          const body = (await profilesRes.json()) as { profiles?: Array<{ id?: string }> };
+          for (const profile of body.profiles ?? []) {
+            if (profile.id) options.push(`policy/${profile.id}`);
+          }
+        }
+        if (modelsRes.ok) {
+          const rows = (await modelsRes.json()) as Array<{ namespaced?: string; provider?: string; id?: string; disabled?: boolean }>;
+          for (const row of rows) {
+            if (row.disabled) continue;
+            const ref = row.namespaced || (row.provider && row.id ? `${row.provider}/${row.id}` : row.id);
+            if (ref && !options.includes(ref)) options.push(ref);
+          }
+        }
+        setModelOptions(options);
+      } catch {
+        // Pickers stay free-text when the catalog is unavailable.
+      }
+    })();
+  }, [apiBase]);
 
   // Poll the open run while it is executing or waiting at a gate.
   useEffect(() => {
@@ -242,6 +281,9 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
   return (
     <div className="workflows-container">
+      <datalist id="ocx-model-refs">
+        {modelOptions.map(ref => <option key={ref} value={ref} />)}
+      </datalist>
       <div className="sessions-header">
         <div className="sessions-header-left">
           <h2 className="sessions-title">
@@ -560,6 +602,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                   <input
                     type="text"
                     className="mono"
+                    list="ocx-model-refs"
                     placeholder="provider/model, combo/id or policy/id"
                     value={startRoles[role] ?? ""}
                     onChange={e => setStartRoles(prev => ({ ...prev, [role]: e.target.value }))}
@@ -589,6 +632,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
       {editor && (
         <WorkflowEditor
           draft={editor.draft}
+          modelOptions={modelOptions}
           idLocked={editor.idLocked}
           overridesBuiltin={editor.overridesBuiltin}
           saving={editorSaving}
