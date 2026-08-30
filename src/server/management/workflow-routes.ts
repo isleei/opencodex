@@ -11,7 +11,7 @@
  * - POST /api/workflows/runs/{id}/abort        → { reason? }
  */
 
-import { configuredAdminAuthToken, jsonResponse } from "../auth-cors";
+import { configuredAdminAuthToken, configuredApiAuthToken, jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import {
@@ -30,9 +30,11 @@ import { ensureWorkflowSkill } from "../../workflow/skill";
 import type { WorkflowDefinition } from "../../workflow/types";
 
 function executorOptions(ctx: ManagementContext) {
+  // The data plane admits either admission secret; prefer the API one when present.
+  const token = configuredApiAuthToken() ?? configuredAdminAuthToken() ?? "";
   return {
     baseUrl: `http://127.0.0.1:${ctx.config.port}`,
-    adminToken: configuredAdminAuthToken() ?? "",
+    adminToken: token,
   };
 }
 
@@ -103,9 +105,9 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
         )
       : undefined;
     try {
-      const task = startRun({ workflowId, title, workspaceDir, roleOverrides });
-      ensureWorkflowSkill();
       const auto = body.auto === true;
+      const task = startRun({ workflowId, title, workspaceDir, roleOverrides, autoRun: auto });
+      ensureWorkflowSkill();
       let execution: { started: boolean; reason?: string } = { started: false };
       if (auto) execution = kickExecution(task.id, { ...executorOptions(ctx), auto: true });
       syncWorkflowLayer();
@@ -141,6 +143,11 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
         const outputs = typeof body.outputs === "string" ? body.outputs : undefined;
         const task = advanceRun(taskId, { outputs });
         syncWorkflowLayer();
+        // An auto run resumes executing by itself once the operator moves it past a
+        // manual phase.
+        if (task.autoRun && task.status === "running") {
+          kickExecution(task.id, { ...executorOptions(ctx), auto: true });
+        }
         return jsonResponse({ ok: true, task }, 200, req, ctx.config);
       }
       if (action === "gate") {
@@ -154,6 +161,9 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
         }
         const task = body.action === "approve" ? approveGate(taskId, { note }) : rejectGate(taskId, { note });
         syncWorkflowLayer();
+        if (task.autoRun && task.status === "running") {
+          kickExecution(task.id, { ...executorOptions(ctx), auto: true });
+        }
         return jsonResponse({ ok: true, task }, 200, req, ctx.config);
       }
       if (action === "execute") {

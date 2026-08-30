@@ -86,6 +86,7 @@ export function startRun(
     title: string;
     workspaceDir?: string;
     roleOverrides?: Record<string, string>;
+    autoRun?: boolean;
   },
   baseDir?: string,
 ): WorkflowTask {
@@ -109,6 +110,7 @@ export function startRun(
     phaseIndex: 0,
     phases: definition.phases.map(phase => ({ id: phase.id, status: "pending" as const })),
     roleOverrides: input.roleOverrides,
+    autoRun: input.autoRun,
     workspaceDir: input.workspaceDir,
     createdAt,
     updatedAt: createdAt,

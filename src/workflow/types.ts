@@ -87,6 +87,8 @@ export interface WorkflowTask {
   phases: WorkflowPhaseState[];
   /** Role name -> modelRef pinned at run start; wins over definition defaults. */
   roleOverrides?: Record<string, string>;
+  /** When true, advance/gate automatically re-kick execution after a manual phase. */
+  autoRun?: boolean;
   workspaceDir?: string;
   currentGate?: WorkflowGateState;
   createdAt: number;

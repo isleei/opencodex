@@ -96,7 +96,8 @@ function formatPhaseTimeline(phases: WorkflowPhaseState[]): string[] {
     const tag = p.status === "done" ? "✓" : p.status === "in_progress" ? "▶" : p.status === "rejected" ? "✗" : p.status === "skipped" ? "»" : "·";
     const ref = p.modelRef ? ` [${p.modelRef}]` : "";
     const outputs = p.outputs ? ` — ${p.outputs.slice(0, 80)}` : "";
-    return `  ${tag} ${p.id}${ref}${outputs}`;
+    const error = p.error ? ` !! ${p.error.slice(0, 120)}` : "";
+    return `  ${tag} ${p.id}${ref}${outputs}${error}`;
   });
 }
 
