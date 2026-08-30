@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useT, type TFn } from "../i18n/shared";
 import { IconCheck, IconX } from "../icons";
 import type { WorkflowDefinition, WorkflowPhase } from "./Workflows";
 
@@ -28,6 +29,7 @@ export default function WorkflowEditor({
   onSave,
   onClose,
 }: WorkflowEditorProps) {
+  const t: TFn = useT();
   const [def, setDef] = useState<WorkflowDefinition>({ ...draft, phases: draft.phases.map(p => ({ ...p })) });
   const [clientErrors, setClientErrors] = useState<string[]>([]);
 
@@ -72,15 +74,15 @@ export default function WorkflowEditor({
 
   const validate = (): string[] => {
     const problems: string[] = [];
-    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(def.id)) problems.push("Workflow id must be alphanumeric (.-_ allowed).");
-    if (def.phases.length === 0) problems.push("At least one phase is required.");
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(def.id)) problems.push(t("workflows.editor.errId"));
+    if (def.phases.length === 0) problems.push(t("workflows.editor.errPhaseRequired"));
     const ids = new Set<string>();
     for (const phase of def.phases) {
-      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(phase.id)) problems.push(`Invalid phase id: ${JSON.stringify(phase.id)}`);
-      if (ids.has(phase.id)) problems.push(`Duplicate phase id: ${phase.id}`);
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(phase.id)) problems.push(t("workflows.editor.errPhaseId", { id: phase.id }));
+      if (ids.has(phase.id)) problems.push(t("workflows.editor.errDuplicate", { id: phase.id }));
       ids.add(phase.id);
     }
-    if (def.phases[0]?.gate) problems.push("The first phase must not be a gate.");
+    if (def.phases[0]?.gate) problems.push(t("workflows.editor.errFirstGate"));
     return problems;
   };
 
@@ -97,7 +99,7 @@ export default function WorkflowEditor({
       <div className="modal-container workflows-editor-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title-row">
-            <h3 className="modal-title">{overridesBuiltin ? `Customize “${draft.id}”` : idLocked ? "Edit workflow" : "New workflow"}</h3>
+            <h3 className="modal-title">{overridesBuiltin ? t("workflows.editor.customize", { id: draft.id }) : idLocked ? t("workflows.editor.edit") : t("workflows.editor.new")}</h3>
           </div>
           <button type="button" className="btn-icon-close" onClick={onClose}><IconX /></button>
         </div>
@@ -105,8 +107,7 @@ export default function WorkflowEditor({
         <div className="modal-body">
           {overridesBuiltin && (
             <div className="workflows-editor-note">
-              Saving stores a user definition with the same id — it overrides the built-in.
-              Delete it later to restore the built-in.
+              {t("workflows.editor.overrideNote")}
             </div>
           )}
           {allErrors.length > 0 && (
@@ -117,7 +118,7 @@ export default function WorkflowEditor({
 
           <div className="workflows-editor-grid">
             <label className="workflows-field">
-              Workflow id
+              {t("workflows.editor.id")}
               <input
                 type="text"
                 className="mono"
@@ -127,7 +128,7 @@ export default function WorkflowEditor({
               />
             </label>
             <label className="workflows-field">
-              Title
+              {t("workflows.editor.title")}
               <input
                 type="text"
                 value={def.title ?? ""}
@@ -136,7 +137,7 @@ export default function WorkflowEditor({
             </label>
           </div>
           <label className="workflows-field">
-            Description
+            {t("workflows.editor.description")}
             <input
               type="text"
               value={def.description ?? ""}
@@ -144,14 +145,14 @@ export default function WorkflowEditor({
             />
           </label>
 
-          <div className="workflows-editor-section">Default models (role → model ref)</div>
+          <div className="workflows-editor-section">{t("workflows.editor.defaults")}</div>
           {Array.from(roleKeys).map(role => (
             <div key={role} className="workflows-editor-role-row">
               <span className="mono">{role}</span>
               <input
                 type="text"
                 className="mono"
-                placeholder="provider/model | combo/id | policy/id"
+                placeholder={t("workflows.editor.defaultsPlaceholder")}
                 value={def.defaults?.[role] ?? ""}
                 onChange={e =>
                   setDef(prev => ({
@@ -162,9 +163,9 @@ export default function WorkflowEditor({
               />
             </div>
           ))}
-          {roleKeys.size === 0 && <p className="workflows-editor-hint">No roles yet — use model refs like <span className="mono">role:planner</span> in a phase to create one.</p>}
+          {roleKeys.size === 0 && <p className="workflows-editor-hint">{t("workflows.editor.noRoles")}</p>}
 
-          <div className="workflows-editor-section">Phases (top runs first)</div>
+          <div className="workflows-editor-section">{t("workflows.editor.phases")}</div>
           {def.phases.map((phase, i) => (
             <div key={i} className="workflows-editor-phase">
               <div className="workflows-editor-phase-row">
@@ -172,7 +173,7 @@ export default function WorkflowEditor({
                   type="text"
                   className="mono workflows-editor-phase-id"
                   value={phase.id}
-                  placeholder="phase-id"
+                  placeholder={t("workflows.editor.phaseIdPlaceholder")}
                   onChange={e => patchPhase(i, { id: e.target.value })}
                 />
                 <select
@@ -196,7 +197,7 @@ export default function WorkflowEditor({
                   <input
                     type="text"
                     className="mono"
-                    placeholder="modelRef (role:planner or provider/model)"
+                    placeholder={t("workflows.editor.modelRefPlaceholder")}
                     value={phase.modelRef ?? ""}
                     onChange={e => patchPhase(i, { modelRef: e.target.value })}
                   />
@@ -212,7 +213,7 @@ export default function WorkflowEditor({
                   <input
                     type="text"
                     className="mono"
-                    placeholder="gate-id"
+                    placeholder={t("workflows.editor.gateIdPlaceholder")}
                     value={phase.gate.id}
                     onChange={e => patchPhase(i, { gate: { ...phase.gate!, id: e.target.value } })}
                   />
@@ -220,9 +221,9 @@ export default function WorkflowEditor({
                     value={phase.gate.rejectTo ?? ""}
                     onChange={e => patchPhase(i, { gate: { ...phase.gate!, rejectTo: e.target.value || undefined } })}
                   >
-                    <option value="">reject → nearest previous work phase</option>
+                    <option value="">{t("workflows.editor.rejectNearest")}</option>
                     {def.phases.filter(p => !p.gate && p.id !== phase.id).map(p => (
-                      <option key={p.id} value={p.id}>reject → {p.id}</option>
+                      <option key={p.id} value={p.id}>{t("workflows.editor.rejectTo", { phase: p.id })}</option>
                     ))}
                   </select>
                 </div>
@@ -230,13 +231,13 @@ export default function WorkflowEditor({
                 <div className="workflows-editor-phase-detail">
                   <input
                     type="text"
-                    placeholder="Prompt for this phase…"
+                    placeholder={t("workflows.editor.promptPlaceholder")}
                     value={phase.prompt ?? ""}
                     onChange={e => patchPhase(i, { prompt: e.target.value })}
                   />
                   <input
                     type="text"
-                    placeholder="Inputs from earlier phases, comma separated (e.g. plan, diff)"
+                    placeholder={t("workflows.editor.inputsPlaceholder")}
                     value={(phase.inputs ?? []).join(", ")}
                     onChange={e => patchPhase(i, {
                       inputs: e.target.value.split(",").map(x => x.trim()).filter(Boolean),
@@ -247,15 +248,15 @@ export default function WorkflowEditor({
             </div>
           ))}
           <div className="workflows-editor-add-row">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(false)}>+ Work phase</button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(true)}>+ Gate</button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(false)}>{t("workflows.editor.addPhase")}</button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(true)}>{t("workflows.editor.addGate")}</button>
           </div>
         </div>
 
         <div className="modal-footer">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>{t("workflows.editor.cancel")}</button>
           <button type="button" className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-            <IconCheck /> {saving ? "Saving…" : "Save workflow"}
+            <IconCheck /> {saving ? t("workflows.editor.saving") : t("workflows.editor.save")}
           </button>
         </div>
       </div>

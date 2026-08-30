@@ -168,6 +168,10 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "pi.title",
   "pi.modelsFile",
   "clients.col.baseUrl",
+
+  // Pure model-ref syntax — the technical grammar is the rendering in every locale.
+
+  "workflows.editor.defaultsPlaceholder",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

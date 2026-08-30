@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT, type TFn } from "../i18n/shared";
 import { IconBot, IconCheck, IconCopy, IconFolder, IconPlay, IconRefresh, IconTerminal, IconX } from "../icons";
 import { formatTokens } from "../format-tokens";
 import WorkflowEditor from "./WorkflowEditor";
@@ -54,12 +55,15 @@ interface JournalEntry {
   detail?: string;
 }
 
-function statusPill(task: WorkflowTask): string {
-  if (task.status === "awaiting_gate") return `awaiting gate: ${task.currentGate?.id ?? "?"}`;
-  return task.status;
+function statusPill(task: WorkflowTask, t: TFn): string {
+  if (task.status === "awaiting_gate") return t("workflows.status.awaiting", { gate: task.currentGate?.id ?? "?" });
+  if (task.status === "running") return t("workflows.status.running");
+  if (task.status === "completed") return t("workflows.status.completed");
+  return t("workflows.status.aborted");
 }
 
 export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
+  const t = useT();
   const [definitions, setDefinitions] = useState<WorkflowDefinition[]>([]);
   const [runs, setRuns] = useState<WorkflowTask[]>([]);
   const [selected, setSelected] = useState<WorkflowTask | null>(null);
@@ -172,7 +176,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
       setShowStart(false);
       setStartTitle("");
       setStartRoles({});
-      setNotice(startAuto ? "Run started — executing until the next gate" : "Run started");
+      setNotice(startAuto ? t("workflows.startAutoNotice") : t("workflows.startNotice"));
       await refreshLists();
       if (body.task) void openRun(body.task.id);
       setTimeout(() => setNotice(null), 4000);
@@ -193,7 +197,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
       const body = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(body.error || `save failed (${res.status})`);
       setEditor(null);
-      setNotice(`Workflow “${draft.id}” saved`);
+      setNotice(t("workflows.runSaved", { id: draft.id }));
       await refreshLists();
       setTimeout(() => setNotice(null), 4000);
     } catch (err) {
@@ -204,12 +208,12 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   };
 
   const deleteDefinition = async (id: string) => {
-    if (!window.confirm(`Delete user workflow “${id}”? Runs already in progress are unaffected.`)) return;
+    if (!window.confirm(t("workflows.deleteConfirm", { id }))) return;
     try {
       const res = await fetch(`${apiBase}/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" });
       const body = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(body.error || `delete failed (${res.status})`);
-      setNotice(`Workflow “${id}” deleted`);
+      setNotice(t("workflows.runDeleted", { id }));
       await refreshLists();
       setTimeout(() => setNotice(null), 4000);
     } catch (err) {
@@ -231,7 +235,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   const copyStatus = () => {
     if (!selected) return;
     const lines = selected.phases.map(p => `${p.status === "done" ? "✓" : p.status === "in_progress" ? "▶" : "·"} ${p.id}${p.outputs ? ` — ${p.outputs}` : ""}`);
-    void navigator.clipboard.writeText(`Run ${selected.id} (${selected.workflowId}) — ${statusPill(selected)}\n${lines.join("\n")}`);
+    void navigator.clipboard.writeText(`Run ${selected.id} (${selected.workflowId}) — ${statusPill(selected, t)}\n${lines.join("\n")}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -242,10 +246,10 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
         <div className="sessions-header-left">
           <h2 className="sessions-title">
             <IconBot className="sessions-title-icon" />
-            Workflows
+            {t("workflows.title")}
           </h2>
           <p className="sessions-subtitle">
-            Codex-led, phase-sequenced model runs: plan with one model, implement with another, review before it lands.
+            {t("workflows.subtitle")}
           </p>
         </div>
         <div className="workflows-header-actions">
@@ -255,7 +259,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
             onClick={() => void refreshLists()}
             disabled={loading}
           >
-            <IconRefresh className={loading ? "spin" : ""} /> Refresh
+            <IconRefresh className={loading ? "spin" : ""} /> {t("workflows.refresh")}
           </button>
           <button
             id="workflows-btn-editor"
@@ -276,7 +280,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               });
             }}
           >
-            New Workflow
+            {t("workflows.editor.new")}
           </button>
           <button
             id="workflows-btn-start"
@@ -287,7 +291,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               setStartWorkflowId(definitions[0]?.id ?? "");
             }}
           >
-            <IconPlay /> New Run
+            <IconPlay /> {t("workflows.newRun")}
           </button>
         </div>
       </div>
@@ -297,11 +301,11 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
       <div className="workflows-layout">
         <div className="workflows-runs-column">
-          <h3 className="workflows-column-title">Runs</h3>
+          <h3 className="workflows-column-title">{t("workflows.runs")}</h3>
           {runs.length === 0 ? (
             <div className="session-empty-state">
               <IconFolder className="session-empty-icon" />
-              <p>No workflow runs yet. Start one with “New Run”.</p>
+              <p>{t("workflows.empty")}</p>
             </div>
           ) : (
             <div className="workflows-run-list">
@@ -318,7 +322,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                   <span className="workflows-run-main">
                     <span className="workflows-run-title">{run.title}</span>
                     <span className="workflows-run-meta">
-                      {run.workflowId} · phase {run.phaseIndex + 1}/{run.phases.length} · {statusPill(run)}
+                      {run.workflowId} · {t("workflows.phaseProgress", { index: run.phaseIndex + 1, total: run.phases.length })} · {statusPill(run, t)}
                     </span>
                   </span>
                 </button>
@@ -328,13 +332,13 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
         </div>
 
         <div className="workflows-detail-column">
-          <h3 className="workflows-column-title">Definitions</h3>
+          <h3 className="workflows-column-title">{t("workflows.definitions")}</h3>
           <div className="workflows-def-list">
             {definitions.map(def => (
               <div key={def.id} className="workflows-def-card">
                 <div className="workflows-def-head">
                   <strong>{def.id}</strong>
-                  {def.builtin && <span className="workflows-def-badge">built-in</span>}
+                  {def.builtin && <span className="workflows-def-badge">{t("workflows.builtin")}</span>}
                   <span className="workflows-def-actions">
                     {def.builtin ? (
                       <button
@@ -391,7 +395,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               <div className="modal-title-row">
                 <h3 className="modal-title">{selected.title}</h3>
                 <span className={`workflows-run-status st-${selected.status}`}>
-                  {statusPill(selected)}
+                  {statusPill(selected, t)}
                 </span>
               </div>
               <button type="button" className="btn-icon-close" onClick={() => setSelected(null)}>
@@ -446,24 +450,24 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
-                      onClick={() => void action(`${selected.id}/execute`, { auto: false }, executing ? "Already executing" : "Phase execution started")}
+                      onClick={() => void action(`${selected.id}/execute`, { auto: false }, executing ? t("workflows.notice.alreadyExecuting") : t("workflows.notice.executeStarted"))}
                       disabled={executing}
                     >
-                      <IconPlay /> Execute phase
+                      <IconPlay /> {t("workflows.executePhase")}
                     </button>
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
-                      onClick={() => { void action(`${selected.id}/advance`, { outputs: outputsDraft }, "Advanced"); setOutputsDraft(""); }}
+                      onClick={() => { void action(`${selected.id}/advance`, { outputs: outputsDraft }, t("workflows.notice.advanced")); setOutputsDraft(""); }}
                     >
-                      <IconTerminal /> Advance
+                      <IconTerminal /> {t("workflows.advance")}
                     </button>
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm workflows-abort"
-                      onClick={() => void action(`${selected.id}/abort`, { reason: "aborted from dashboard" }, "Run aborted")}
+                      onClick={() => void action(`${selected.id}/abort`, { reason: "aborted from dashboard" }, t("workflows.notice.aborted"))}
                     >
-                      <IconX /> Abort
+                      <IconX /> {t("workflows.abort")}
                     </button>
                   </div>
                 </div>
@@ -471,21 +475,21 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
               {selected.status === "awaiting_gate" && (
                 <div className="workflows-gate-box">
-                  <strong>Waiting at gate: {selected.currentGate?.id}</strong>
+                  <strong>{t("workflows.gateWaiting", { gate: selected.currentGate?.id ?? "?" })}</strong>
                   <div className="workflows-advance-actions">
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
-                      onClick={() => void action(`${selected.id}/gate`, { action: "approve", note: "approved from dashboard" }, "Gate approved")}
+                      onClick={() => void action(`${selected.id}/gate`, { action: "approve", note: "approved from dashboard" }, t("workflows.notice.gateApproved"))}
                     >
-                      <IconCheck /> Approve
+                      <IconCheck /> {t("workflows.gateApprove")}
                     </button>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      onClick={() => void action(`${selected.id}/gate`, { action: "reject", note: "rejected from dashboard" }, "Gate rejected — sent back for rework")}
+                      onClick={() => void action(`${selected.id}/gate`, { action: "reject", note: "rejected from dashboard" }, t("workflows.notice.gateRejected"))}
                     >
-                      <IconX /> Reject
+                      <IconX /> {t("workflows.gateReject")}
                     </button>
                   </div>
                 </div>
@@ -493,7 +497,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
               {journal.length > 0 && (
                 <div className="workflows-journal">
-                  <strong>Journal</strong>
+                  <strong>{t("workflows.journal")}</strong>
                   <pre className="mono">
                     {journal.slice(-12).map(e => `${new Date(e.ts).toLocaleTimeString()}  ${e.event}${e.phaseId ? ` ${e.phaseId}` : ""}${e.detail ? ` — ${e.detail}` : ""}`).join("\n")}
                   </pre>
@@ -503,14 +507,14 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
             <div className="modal-footer">
               <button type="button" className="btn btn-ghost btn-sm" onClick={copyStatus}>
-                <IconCopy /> {copied ? "Copied" : "Copy status"}
+                <IconCopy /> {copied ? t("workflows.copied") : t("workflows.copyStatus")}
               </button>
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 onClick={() => { setSelected(null); setJournal([]); }}
               >
-                <IconRefresh /> Close
+                <IconRefresh /> {t("workflows.close")}
               </button>
             </div>
           </div>
@@ -521,14 +525,14 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
         <div className="modal-backdrop" onClick={() => setShowStart(false)}>
           <div className="modal-container workflows-start-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-title-row"><h3 className="modal-title">Start a workflow run</h3></div>
+              <div className="modal-title-row"><h3 className="modal-title">{t("workflows.start.title")}</h3></div>
               <button type="button" className="btn-icon-close" onClick={() => setShowStart(false)}>
                 <IconX />
               </button>
             </div>
             <div className="modal-body">
               <label className="workflows-field">
-                Workflow
+                {t("workflows.start.workflow")}
                 <select
                   value={startWorkflowId}
                   onChange={e => {
@@ -542,7 +546,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                 </select>
               </label>
               <label className="workflows-field">
-                Title
+                {t("workflows.start.titleField")}
                 <input
                   type="text"
                   value={startTitle}
@@ -552,7 +556,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               </label>
               {roleSlotsFor(definitions.find(d => d.id === startWorkflowId) ?? null).map(role => (
                 <label key={role} className="workflows-field">
-                  Model for role “{role}”
+                  {t("workflows.start.roleModel", { role })}
                   <input
                     type="text"
                     className="mono"
@@ -564,18 +568,18 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               ))}
               <label className="workflows-field workflows-field-inline">
                 <input type="checkbox" checked={startAuto} onChange={e => setStartAuto(e.target.checked)} />
-                Execute phases automatically until the next gate
+                {t("workflows.start.auto")}
               </label>
             </div>
             <div className="modal-footer">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowStart(false)}>Cancel</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowStart(false)}>{t("workflows.editor.cancel")}</button>
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 onClick={() => void startRun()}
                 disabled={!startWorkflowId || !startTitle.trim()}
               >
-                <IconPlay /> Start run
+                <IconPlay /> {t("workflows.start.submit")}
               </button>
             </div>
           </div>
