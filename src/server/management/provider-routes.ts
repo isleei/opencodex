@@ -58,6 +58,7 @@ import {
   getProviderDiscoveryStatus,
   getProviderLiveModelCount,
 } from "../../codex/model-cache";
+import { getCodexModelEntitlementStatus } from "../../codex/model-entitlements";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { modelAutoCompactTokenLimitsConfigError } from "../../providers/auto-compact-budget";
 import { resolveCodexHomeDir } from "../../codex/home";
@@ -479,6 +480,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       codexAccountMode: providerCodexAccountMode(name, p),
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
+      ...(name === "openai" && isCanonicalOpenAiForwardProvider(p)
+        ? { entitlement: getCodexModelEntitlementStatus(config) }
+        : {}),
     })));
   }
 
