@@ -286,4 +286,35 @@ describe("Antigravity CLI (ocx agy) unit and integration tests", () => {
       console.error = originalErr;
     }
   });
+
+  test("10. syncAntigravityCredentialsToGemini writes oauth_creds.json and google_accounts.json", async () => {
+    const { syncAntigravityCredentialsToGemini } = await import("../src/cli/agy");
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const tempGeminiDir = mkdtempSync(join(tmpdir(), "ocx-gemini-test-"));
+    try {
+      const res = await syncAntigravityCredentialsToGemini("e059dc26", {
+        geminiDirImpl: () => tempGeminiDir,
+        getCredentialImpl: () => ({
+          access: "mock_access_token_123",
+          refresh: "mock_refresh_token_456",
+          expires: Date.now() + 3600 * 1000,
+          email: "villanitaicebot0@gmail.com",
+          idToken: "mock_id_token",
+        }),
+      });
+      expect(res.success).toBe(true);
+
+      const creds = JSON.parse(readFileSync(join(tempGeminiDir, "oauth_creds.json"), "utf8"));
+      expect(creds.access_token).toBeDefined();
+      expect(creds.token_type).toBe("Bearer");
+
+      const accs = JSON.parse(readFileSync(join(tempGeminiDir, "google_accounts.json"), "utf8"));
+      expect(accs.active).toBe("villanitaicebot0@gmail.com");
+    } finally {
+      rmSync(tempGeminiDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,9 +1,10 @@
 /**
  * `ocx agy [agy args...]` — launch Antigravity CLI with account discovery,
- * interactive multi-account picker, automatic proxy readiness, and usage hooks.
+ * interactive multi-account picker, automatic proxy readiness, credentials sync
+ * to ~/.gemini/ (oauth_creds.json & google_accounts.json), and usage tracking.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -11,9 +12,12 @@ import { loadConfig } from "../config";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { commandInvocation, resolveWindowsCommand } from "../lib/win-exec";
-import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import { refreshAntigravityToken } from "../oauth/google-antigravity";
+import { getAccountCredential, listAccounts, saveAccountCredential } from "../oauth/store";
+import type { OAuthCredentials } from "../oauth/types";
+import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
-import { apiJson, fetchOAuthRows, resolveBaseUrl, type AccountDeps, type AccountRow } from "./account-api";
+import { apiJson, fetchOAuthRows, type AccountDeps, type AccountRow } from "./account-api";
 import { takeFlag, takeOption } from "./runtime-api";
 
 export interface AgyDeps extends AccountDeps {
@@ -23,6 +27,8 @@ export interface AgyDeps extends AccountDeps {
   stdoutImpl?: NodeJS.WriteStream;
   isInteractive?: boolean;
   findLiveProxyImpl?: () => Promise<LiveProxy | null>;
+  geminiDirImpl?: () => string;
+  getCredentialImpl?: (provider: string, accountId: string) => OAuthCredentials | null;
   exitImpl?: (code: number) => void;
 }
 
@@ -226,7 +232,7 @@ export async function getAntigravityAccounts(deps: AgyDeps, baseUrl: string): Pr
 }
 
 /**
- * Switch the active account for Google Antigravity.
+ * Switch the active account for Google Antigravity in OpenCodex.
  */
 export async function setAntigravityActiveAccount(deps: AgyDeps, baseUrl: string, accountId: string): Promise<boolean> {
   const res = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/active", {
@@ -234,6 +240,90 @@ export async function setAntigravityActiveAccount(deps: AgyDeps, baseUrl: string
     accountId,
   });
   return res.status === 200;
+}
+
+/**
+ * Synchronize the selected Antigravity account's OAuth credentials into ~/.gemini/
+ * (oauth_creds.json & google_accounts.json) so the native `agy` CLI logs in directly as this account.
+ */
+export async function syncAntigravityCredentialsToGemini(
+  accountId: string,
+  deps: AgyDeps = {},
+): Promise<{ success: boolean; email?: string; error?: string }> {
+  try {
+    const getCred = deps.getCredentialImpl ?? getAccountCredential;
+    const cred = getCred("google-antigravity", accountId);
+    if (!cred) {
+      return { success: false, error: `No stored credentials for account ${accountId}` };
+    }
+
+    let effectiveCred = cred;
+    // Auto-refresh token if close to expiry (< 5 min)
+    if (cred.refresh && (!cred.access || !cred.expires || cred.expires < Date.now() + 5 * 60 * 1000)) {
+      try {
+        const refreshed = await refreshAntigravityToken(cred.refresh);
+        effectiveCred = { ...cred, ...refreshed };
+        await saveAccountCredential("google-antigravity", accountId, effectiveCred);
+      } catch {
+        // Fall back to existing credential if refresh fails
+      }
+    }
+
+    const geminiDir = deps.geminiDirImpl?.()
+      || process.env.ANTIGRAVITY_HOME
+      || process.env.GEMINI_HOME
+      || join(homedir(), ".gemini");
+
+    if (!existsSync(geminiDir)) {
+      mkdirSync(geminiDir, { recursive: true });
+    }
+
+    // 1. Write oauth_creds.json
+    const oauthCredsPath = join(geminiDir, "oauth_creds.json");
+    const oauthData = {
+      access_token: effectiveCred.access || "",
+      scope: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
+      token_type: "Bearer",
+      id_token: ((effectiveCred as Record<string, unknown>).idToken as string) || "",
+      expiry_date: effectiveCred.expires || (Date.now() + 3600 * 1000),
+      refresh_token: effectiveCred.refresh || "",
+    };
+    writeFileSync(oauthCredsPath, JSON.stringify(oauthData, null, 2), "utf8");
+
+    // 2. Write google_accounts.json
+    const accountsPath = join(geminiDir, "google_accounts.json");
+    const existingOld: string[] = [];
+    try {
+      if (existsSync(accountsPath)) {
+        const oldJson = JSON.parse(readFileSync(accountsPath, "utf8"));
+        if (oldJson.active && oldJson.active !== effectiveCred.email) {
+          existingOld.push(oldJson.active);
+        }
+        if (Array.isArray(oldJson.old)) {
+          existingOld.push(...oldJson.old);
+        }
+      }
+    } catch {}
+
+    const allAccounts = listAccounts("google-antigravity");
+    for (const a of allAccounts) {
+      if (a.credential?.email && a.credential.email !== effectiveCred.email) {
+        existingOld.push(a.credential.email);
+      }
+    }
+    const uniqueOld = [...new Set(existingOld)].filter(e => e && e !== effectiveCred.email);
+
+    const googleAccountsData = {
+      active: effectiveCred.email || "",
+      old: uniqueOld,
+    };
+    writeFileSync(accountsPath, JSON.stringify(googleAccountsData, null, 2), "utf8");
+
+    return { success: true, email: effectiveCred.email };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, error: msg };
+  }
 }
 
 /**
@@ -306,10 +396,15 @@ export async function cmdAgy(args: string[], deps: AgyDeps = {}): Promise<number
       console.error(`Error: Failed to switch to account ${matched.id}`);
       return 1;
     }
+
+    // Sync credentials to ~/.gemini/
+    await syncAntigravityCredentialsToGemini(matched.id, deps);
+
     if (wantsJson) {
       console.log(JSON.stringify({ ok: true, activeId: matched.id, email: matched.email || matched.label }, null, 2));
     } else {
       console.log(`✅ google-antigravity: active account is now ${matched.email || matched.label || matched.id} (id: ${matched.id.slice(0, 8)})`);
+      console.log(`   Credentials synchronized to ~/.gemini/oauth_creds.json`);
     }
     return 0;
   }
@@ -334,7 +429,7 @@ export async function cmdAgy(args: string[], deps: AgyDeps = {}): Promise<number
   }
 
   // Extract account flag (--account <id> or -a <id>)
-  let accountQuery = takeOption(rest, "--account") ?? takeOption(rest, "-a");
+  const accountQuery = takeOption(rest, "--account") ?? takeOption(rest, "-a");
   const noSelect = takeFlag(rest, "--no-select");
 
   // Ensure proxy is running
@@ -353,9 +448,11 @@ export async function cmdAgy(args: string[], deps: AgyDeps = {}): Promise<number
     const res = await getAntigravityAccounts(deps, baseUrl);
     accounts = res.rows;
     currentActiveId = res.activeId;
-  } catch (err) {
+  } catch {
     // Non-fatal if account query fails
   }
+
+  let selectedAccountId = currentActiveId;
 
   // Account selection logic
   if (accountQuery) {
@@ -368,6 +465,7 @@ export async function cmdAgy(args: string[], deps: AgyDeps = {}): Promise<number
       }
       return 1;
     }
+    selectedAccountId = matched.id;
     if (matched.id !== currentActiveId) {
       await setAntigravityActiveAccount(deps, baseUrl, matched.id);
       console.log(`🔄 Switched to Antigravity account: ${matched.email || matched.label || matched.id}`);
@@ -376,11 +474,19 @@ export async function cmdAgy(args: string[], deps: AgyDeps = {}): Promise<number
     const isInteractive = deps.isInteractive ?? (deps.stdinImpl ? deps.stdinImpl.isTTY : process.stdin.isTTY);
     if (isInteractive) {
       const selected = await promptAccountSelection(accounts, currentActiveId, deps);
-      if (selected && selected.id !== currentActiveId) {
-        await setAntigravityActiveAccount(deps, baseUrl, selected.id);
-        console.log(`🔄 Switched to Antigravity account: ${selected.email || selected.label || selected.id}`);
+      if (selected) {
+        selectedAccountId = selected.id;
+        if (selected.id !== currentActiveId) {
+          await setAntigravityActiveAccount(deps, baseUrl, selected.id);
+          console.log(`🔄 Switched to Antigravity account: ${selected.email || selected.label || selected.id}`);
+        }
       }
     }
+  }
+
+  // Ensure chosen account's OAuth credentials are written to ~/.gemini/ so native `agy` uses them
+  if (selectedAccountId) {
+    await syncAntigravityCredentialsToGemini(selectedAccountId, deps);
   }
 
   // Locate agy executable
