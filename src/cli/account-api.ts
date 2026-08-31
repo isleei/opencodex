@@ -314,7 +314,7 @@ interface OAuthAccountDto {
   quotaUnavailable?: boolean;
 }
 
-async function fetchOAuthRows(
+export async function fetchOAuthRows(
   deps: AccountDeps,
   baseUrl: string,
   name: string,

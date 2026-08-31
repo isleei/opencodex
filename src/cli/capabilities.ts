@@ -848,6 +848,41 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "payload",
   },
+  {
+    command: ["agy"],
+    summary: "Launch Antigravity CLI (agy) with interactive account selection and proxy readiness.",
+    routes: [
+      { method: "GET", path: "/api/oauth/accounts" },
+      { method: "PUT", path: "/api/oauth/accounts/active" },
+    ],
+    flags: [
+      { name: "--account", value: "string", summary: "Account ID, email, or 1-based index to use for the session." },
+      { name: "-a", value: "string", summary: "Alias of --account." },
+      { name: "--no-select", value: "boolean", summary: "Skip interactive prompt and use the current active account." },
+    ],
+    mutates: true,
+    json: "none",
+  },
+  {
+    command: ["agy", "accounts"],
+    summary: "List configured Google Antigravity accounts.",
+    routes: [{ method: "GET", path: "/api/oauth/accounts" }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit accounts as JSON." },
+    ],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["agy", "use"],
+    summary: "Switch the active Google Antigravity account.",
+    routes: [{ method: "PUT", path: "/api/oauth/accounts/active" }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit receipt as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+  },
 ];
 
 /** Capabilities that drive `route`, for `ocx capabilities --route`. */

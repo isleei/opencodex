@@ -87,6 +87,7 @@ Usage:
   ocx mcode [args...]         Launch MiniMax Code through its managed provider
   ocx mmx text <sub> [args]   Launch MiniMax CLI text through the proxy
   ocx zcode [sub]             Connect ZCode to the proxy (managed provider)
+  ocx agy [args...]           Launch Antigravity CLI with account selector and proxy
   ocx skills <sub>            Centralized skills store, cross-agent symlinks, and trash
   ocx mcp <sub>               Multi-client MCP configuration, toggling, and cloning
   ocx sessions <sub>          Cross-agent session hub, turns inspect, and handoffs
