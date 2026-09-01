@@ -30,7 +30,7 @@ test("every row maps one-to-one onto a page", () => {
   // The exact nine, in order. A count alone would pass if a row were swapped for
   // another, and Routing folding into Models is precisely that kind of change.
   expect(ids).toEqual([
-    "dashboard", "codex-set", "providers", "models", "subagents", "skills", "sessions",
+    "dashboard", "codex-set", "providers", "models", "subagents", "skills", "sessions", "workflows",
     "logs", "usage", "storage", "cloud", "clients", "integrations",
   ]);
   // No two rows share a page id, which is what made the correction helper necessary.
