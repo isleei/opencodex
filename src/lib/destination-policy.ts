@@ -326,8 +326,16 @@ export async function providerDestinationResolvedError(
   } catch {
     return null;
   }
-  if (!hostname || isIP(hostname) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost")) {
-    return null; // literals and localhost are fully handled by the sync path
+  if (
+    !hostname
+    || isIP(hostname) !== 0
+    || hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname.endsWith(".test")
+    || hostname.endsWith(".example")
+    || hostname.endsWith(".invalid")
+  ) {
+    return null; // literals, localhost, and RFC 2606 test domains are fully handled by the sync path
   }
   if (providerAllowsPrivateNetwork(name, provider)) return null;
   let addresses: { address: string }[];

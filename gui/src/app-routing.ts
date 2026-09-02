@@ -102,6 +102,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/claude",
   "integrations/claude/desktop",
   "integrations/grok",
+  "integrations/cursor",
   "integrations/opencode",
   "integrations/pi",
   "integrations/omp",

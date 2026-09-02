@@ -21,7 +21,15 @@
     "src/api.ts",
     "src/format*.ts",
     "src/icons.tsx",
-    "src/provider-icons.ts"
+    "src/provider-icons.ts",
+    "src/pages/skills-mcp/**",
+    "src/pages/sessions/**",
+    "src/pages/Sessions.tsx",
+    "src/pages/Skills.tsx",
+    "src/pages/Workflows.tsx",
+    "src/pages/WorkflowEditor.tsx",
+    "src/pages/Cloud.tsx",
+    "src/pages/Clients.tsx"
   ],
   "overrides": [
     {

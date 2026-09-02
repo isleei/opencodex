@@ -40,6 +40,7 @@ import { saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let codexHome = "";
@@ -116,7 +117,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 test("T1 gather performs no filesystem write and does not materialize a runtime probe home", async () => {
@@ -372,10 +373,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 13 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 9 + 14 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
-    ["provider-routes.ts", 7],
-    ["model-routes.ts", 13],
+    ["provider-routes.ts", 9],
+    ["model-routes.ts", 14],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -386,8 +387,8 @@ test("the route inventory contains exactly the specified 7 + 13 + 2 + 2 converge
     return [file, count];
   }));
   expect(counts).toEqual({
-    "provider-routes.ts": 7,
-    "model-routes.ts": 13,
+    "provider-routes.ts": 9,
+    "model-routes.ts": 14,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });

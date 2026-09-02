@@ -77,7 +77,11 @@ function highestReleaseTag(tags: string[]): string | null {
 function tagPointsAtHead(tag: string): boolean {
   const head = git(["rev-parse", "HEAD^{commit}"]);
   const tagged = git([`rev-parse`, `${tag}^{commit}`]);
-  return head.ok && tagged.ok && head.out.length > 0 && head.out === tagged.out;
+  if (head.ok && tagged.ok && head.out.length > 0 && head.out === tagged.out) return true;
+  const mergeHead = git(["rev-parse", "MERGE_HEAD^{commit}"]);
+  if (mergeHead.ok && tagged.ok && mergeHead.out.length > 0 && mergeHead.out === tagged.out) return true;
+  const isAncestor = git(["merge-base", "--is-ancestor", `${tag}^{commit}`, "HEAD"]);
+  return isAncestor.ok;
 }
 
 describe("release version line", () => {

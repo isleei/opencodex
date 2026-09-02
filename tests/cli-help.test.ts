@@ -1,12 +1,13 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { EXPORT_CLIENT_IDS } from "../src/clients/config-export";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -119,8 +120,8 @@ describe("CLI subcommand help", () => {
         expect(readFileSync(statePath)).toEqual(stateBefore);
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(binDir, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(binDir);
     }
   });
 
@@ -130,6 +131,30 @@ describe("CLI subcommand help", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("--no-start");
+  });
+
+  test("GUI help documents explicit-origin pairing without making a live request", () => {
+    const result = runCli(["help", "gui"]);
+    expectSpawnFinished(result, "ocx help gui");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: ocx gui [pair --origin <browser-origin> [--json]]");
+    expect(result.stdout).toContain("single-use");
+    expect(result.stdout).toContain("must not be persisted");
+  });
+
+  test("connect help exposes stdin-only credentials and offline disconnect", () => {
+    const connect = runCli(["help", "connect"]);
+    expectSpawnFinished(connect, "ocx help connect");
+    expect(connect.status).toBe(0);
+    expect(connect.stdout).toContain("--pairing-code-stdin");
+    expect(connect.stdout).toContain("--admin-token-stdin");
+    expect(connect.stdout).not.toContain("--admin-token <");
+
+    const disconnect = runCli(["help", "disconnect"]);
+    expectSpawnFinished(disconnect, "ocx help disconnect");
+    expect(disconnect.status).toBe(0);
+    expect(disconnect.stdout).toContain("--keep-catalog");
   });
 
   test("unknown command with help flag remains an error", () => {
@@ -184,7 +209,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("routing=");
       expect(result.stdout).not.toContain("the running proxy is unused");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -215,7 +240,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).not.toContain("Plain `codex` now runs natively");
       expect(readFileSync(configPath, "utf8")).toBe(before);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -248,8 +273,8 @@ describe("CLI subcommand help", () => {
         expect(readFileSync(markerPath, "utf8")).toBe('{"installed":true}');
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -268,7 +293,7 @@ describe("CLI subcommand help", () => {
       expect(result.stderr).toBe("");
       expect(existsSync(statePath)).toBe(false);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -314,8 +339,8 @@ describe("CLI subcommand help", () => {
         .toEqual({ model_provider: "openai", source: "cli" });
       restored.close();
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     }
   });
 

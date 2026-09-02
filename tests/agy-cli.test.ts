@@ -17,32 +17,32 @@ describe("Antigravity CLI (ocx agy) unit and integration tests", () => {
       provider: "google-antigravity",
       type: "oauth",
       id: "e059dc2612345678",
-      label: "v***0@gmail.com",
-      email: "v***0@gmail.com",
+      label: "v***0@example.com",
+      email: "v***0@example.com",
       active: false,
     },
     {
       provider: "google-antigravity",
       type: "oauth",
       id: "8d76ae932b8f15dcc549dc769d3c62f2",
-      label: "s***y@gmail.com",
-      email: "s***y@gmail.com",
+      label: "s***y@example.com",
+      email: "s***y@example.com",
       active: false,
     },
     {
       provider: "google-antigravity",
       type: "oauth",
       id: "dfcbb3cdd8678394f8ccc93c48298594",
-      label: "s***i@gmail.com",
-      email: "s***i@gmail.com",
+      label: "s***i@example.com",
+      email: "s***i@example.com",
       active: false,
     },
     {
       provider: "google-antigravity",
       type: "oauth",
       id: "bcb7e633577295bad2b61345c7e24222",
-      label: "s***y@gmail.com",
-      email: "s***y@gmail.com",
+      label: "s***y@example.com",
+      email: "s***y@example.com",
       active: true,
     },
   ];
@@ -55,11 +55,11 @@ describe("Antigravity CLI (ocx agy) unit and integration tests", () => {
     expect(matchAntigravityAccount(sampleAccounts, "5")).toBeNull();
 
     // Exact ID
-    expect(matchAntigravityAccount(sampleAccounts, "e059dc2612345678")?.email).toBe("v***0@gmail.com");
+    expect(matchAntigravityAccount(sampleAccounts, "e059dc2612345678")?.email).toBe("v***0@example.com");
 
     // Prefix match (>= 4 chars)
-    expect(matchAntigravityAccount(sampleAccounts, "e059")?.email).toBe("v***0@gmail.com");
-    expect(matchAntigravityAccount(sampleAccounts, "dfcb")?.email).toBe("s***i@gmail.com");
+    expect(matchAntigravityAccount(sampleAccounts, "e059")?.email).toBe("v***0@example.com");
+    expect(matchAntigravityAccount(sampleAccounts, "dfcb")?.email).toBe("s***i@example.com");
 
     // Email match
     expect(matchAntigravityAccount(sampleAccounts, "v***0")?.id).toBe("e059dc2612345678");
@@ -301,7 +301,7 @@ describe("Antigravity CLI (ocx agy) unit and integration tests", () => {
           access: "mock_access_token_123",
           refresh: "mock_refresh_token_456",
           expires: Date.now() + 3600 * 1000,
-          email: "villanitaicebot0@gmail.com",
+          email: "villanitaicebot0@example.com",
           idToken: "mock_id_token",
         }),
       });
@@ -312,7 +312,7 @@ describe("Antigravity CLI (ocx agy) unit and integration tests", () => {
       expect(creds.token_type).toBe("Bearer");
 
       const accs = JSON.parse(readFileSync(join(tempGeminiDir, "google_accounts.json"), "utf8"));
-      expect(accs.active).toBe("villanitaicebot0@gmail.com");
+      expect(accs.active).toBe("villanitaicebot0@example.com");
     } finally {
       rmSync(tempGeminiDir, { recursive: true, force: true });
     }
