@@ -676,6 +676,7 @@ export const ko: Record<TKey, string> = {
   "logs.filter.surface.claude": "Claude",
   "logs.filter.surface.codex": "Codex",
   "logs.filter.surface.grok": "Grok",
+  "logs.filter.surface.agy": "AGY",
   "logs.filter.interceptedHelpersOnly": "가로챈 헬퍼만",
   "logs.badge.interceptedHelper": "I · {model}",
   "logs.badge.interceptedHelperTitle": "가로챈 헬퍼 요청",

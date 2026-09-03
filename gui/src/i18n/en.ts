@@ -690,6 +690,7 @@ export const en = {
   "logs.filter.surface.claude": "Claude",
   "logs.filter.surface.codex": "Codex",
   "logs.filter.surface.grok": "Grok",
+  "logs.filter.surface.agy": "AGY",
   "logs.filter.interceptedHelpersOnly": "Intercepted helpers only",
   "logs.badge.interceptedHelper": "I · {model}",
   "logs.badge.interceptedHelperTitle": "Intercepted helper request",

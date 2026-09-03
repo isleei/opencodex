@@ -13,7 +13,7 @@ import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estim
  */
 export const USAGE_RANGES = ["today", "7d", "30d", "all"] as const;
 export type UsageRange = typeof USAGE_RANGES[number];
-export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
+export const USAGE_SURFACES = ["all", "codex", "claude", "grok", "agy"] as const;
 export type UsageSurface = typeof USAGE_SURFACES[number];
 
 export interface UsageSummaryTotals {
@@ -256,7 +256,8 @@ export function parseRange(input: string | null | undefined): UsageRange {
 }
 
 export function parseUsageSurface(input: string | null | undefined): UsageSurface {
-  if (input === "codex" || input === "claude" || input === "grok") return input;
+  if (input === "codex" || input === "claude" || input === "grok" || input === "agy") return input;
+  if (input === "antigravity") return "agy";
   return "all";
 }
 
@@ -1095,6 +1096,7 @@ export function summarizeUsage(
     if (since !== null && entry.timestamp < since) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
+    if (surface === "agy") return entry.surface === "agy" || entry.surface === "antigravity";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
     // non-Claude turn landed here, and `surface !== "claude"` also swallowed
     // claude-desktop — disjoint predicates fix both.

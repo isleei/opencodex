@@ -674,6 +674,7 @@ export const ru: Record<TKey, string> = {
   "logs.filter.surface.claude": "Claude",
   "logs.filter.surface.codex": "Codex",
   "logs.filter.surface.grok": "Grok",
+  "logs.filter.surface.agy": "AGY",
   "logs.filter.interceptedHelpersOnly": "Только перехваченные помощники",
   "logs.badge.interceptedHelper": "I · {model}",
   "logs.badge.interceptedHelperTitle": "Перехваченный запрос помощника",

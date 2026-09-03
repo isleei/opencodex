@@ -688,6 +688,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.filter.surface.claude": "Claude",
   "logs.filter.surface.codex": "Codex",
   "logs.filter.surface.grok": "Grok",
+  "logs.filter.surface.agy": "AGY",
   "logs.filter.interceptedHelpersOnly": "僅已攔截的輔助請求",
   "logs.badge.interceptedHelper": "I · {model}",
   "logs.badge.interceptedHelperTitle": "已攔截的輔助請求",

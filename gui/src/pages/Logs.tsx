@@ -604,7 +604,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
         <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
-          {(["all", "claude", "codex", "grok"] as const).map(surface => (
+          {(["all", "claude", "codex", "grok", "agy"] as const).map(surface => (
             <button
               key={surface}
               type="button"

@@ -657,6 +657,7 @@ export const de: Record<TKey, string> = {
   "logs.filter.surface.claude": "Claude",
   "logs.filter.surface.codex": "Codex",
   "logs.filter.surface.grok": "Grok",
+  "logs.filter.surface.agy": "AGY",
   "logs.filter.interceptedHelpersOnly": "Nur abgefangene Helfer",
   "logs.badge.interceptedHelper": "I · {model}",
   "logs.badge.interceptedHelperTitle": "Abgefangene Helfer-Anfrage",

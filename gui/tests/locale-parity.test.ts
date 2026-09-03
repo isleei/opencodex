@@ -84,6 +84,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "logs.filter.surface.claude",
   "logs.filter.surface.codex",
   "logs.filter.surface.grok",
+  "logs.filter.surface.agy",
   // Modal labels: transport headers, badges, URL field kept in English (zh/ko agree)
   "modal.apiKeyTransportBearer",
   "modal.badge.direct",

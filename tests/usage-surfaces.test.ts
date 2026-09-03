@@ -32,6 +32,7 @@ const ENTRIES: PersistedUsageEntry[] = [
   entry("claude", "via-claude-code"),
   entry("claude-desktop", "via-desktop"),
   entry("grok", "via-grok"),
+  entry("agy", "via-agy"),
   entry(undefined, "via-codex-cli"),
 ];
 
@@ -39,16 +40,19 @@ function modelsFor(surface: Parameters<typeof summarizeUsage>[3]): string[] {
   return summarizeUsage(ENTRIES, "all", Date.now(), surface).models.map(m => m.model).sort();
 }
 
-test("the four buckets are disjoint", () => {
+test("the five buckets are disjoint", () => {
   expect(modelsFor("claude")).toEqual(["via-claude-code", "via-desktop"]);
   expect(modelsFor("grok")).toEqual(["via-grok"]);
+  expect(modelsFor("agy")).toEqual(["via-agy"]);
   // codex = the historical unlabelled bucket. Crucially it must NOT contain
   // claude-desktop anymore — that was the bug.
   expect(modelsFor("codex")).toEqual(["via-codex-cli"]);
-  expect(modelsFor("all")).toEqual(["via-claude-code", "via-codex-cli", "via-desktop", "via-grok"]);
+  expect(modelsFor("all")).toEqual(["via-agy", "via-claude-code", "via-codex-cli", "via-desktop", "via-grok"]);
 });
 
-test("parseUsageSurface accepts grok and still rejects unknown values", () => {
+test("parseUsageSurface accepts grok and agy and still rejects unknown values", () => {
+  expect(parseUsageSurface("agy")).toBe("agy");
+  expect(parseUsageSurface("antigravity")).toBe("agy");
   expect(parseUsageSurface("grok")).toBe("grok");
   expect(parseUsageSurface("codex")).toBe("codex");
   expect(parseUsageSurface("claude")).toBe("claude");
