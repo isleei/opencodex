@@ -75,6 +75,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "logs.filter.surface.claude",
   "logs.filter.surface.codex",
   "logs.filter.surface.grok",
+  "logs.filter.surface.agy",
   "logs.badge.claude",
   "logs.badge.grok",
   "logs.col.estimatedCost",

@@ -10,7 +10,7 @@ async function read(path: string): Promise<string> {
 test("the Usage filter includes grok with its icon", async () => {
   const page = await read("../src/pages/Usage.tsx");
   expect(page).toContain('"grok"');
-  expect(page).toContain('(["all", "codex", "claude", "grok"]');
+  expect(page).toContain('(["all", "codex", "claude", "grok"');
   expect(page).toContain("/provider-icons/grok.svg");
 });
 
