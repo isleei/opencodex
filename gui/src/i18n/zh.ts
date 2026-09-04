@@ -2841,6 +2841,8 @@ export const zh: Record<TKey, string> = {
   "nav.subscriptions": "订阅额度",
   "subscriptions.title": "订阅与套餐额度",
   "subscriptions.subtitle": "集中查看 OpenAI Codex、xAI Grok、Google Antigravity 等所有订阅额度与账号状态，支持 AGY 多账号一键切换。",
+  "subscriptions.totalAccounts": "账号总数",
+  "subscriptions.agyAccounts": "AGY 账号数",
   "subscriptions.refreshAll": "刷新所有额度",
   "subscriptions.refreshing": "正在刷新…",
   "subscriptions.lastUpdated": "上次更新：{time}",

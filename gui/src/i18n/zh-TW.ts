@@ -2849,6 +2849,8 @@ export const zhTW: Record<TKey, string> = {
   "nav.subscriptions": "訂閱額度",
   "subscriptions.title": "訂閱與方案額度",
   "subscriptions.subtitle": "集中查看 OpenAI Codex、xAI Grok、Google Antigravity 等所有訂閱額度與帳號狀態，支援 AGY 多帳號一鍵切換。",
+  "subscriptions.totalAccounts": "帳號總數",
+  "subscriptions.agyAccounts": "AGY 帳號數",
   "subscriptions.refreshAll": "重新整理所有額度",
   "subscriptions.refreshing": "正在重新整理…",
   "subscriptions.lastUpdated": "上次更新：{time}",

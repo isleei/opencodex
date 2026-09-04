@@ -2804,6 +2804,8 @@ export const fr: Record<TKey, string> = {
   "nav.subscriptions": "Abonnements",
   "subscriptions.title": "Abonnements et quotas",
   "subscriptions.subtitle": "Vue unifiée des quotas pour Codex, Grok et Antigravity, avec changement de compte en 1 clic pour AGY.",
+  "subscriptions.totalAccounts": "Total des comptes",
+  "subscriptions.agyAccounts": "Comptes AGY",
   "subscriptions.refreshAll": "Actualiser tous les quotas",
   "subscriptions.refreshing": "Actualisation…",
   "subscriptions.lastUpdated": "Dernière mise à jour : {time}",

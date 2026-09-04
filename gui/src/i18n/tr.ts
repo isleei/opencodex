@@ -2842,6 +2842,8 @@ export const tr: Record<TKey, string> = {
   "nav.subscriptions": "Abonelikler",
   "subscriptions.title": "Abonelikler ve Kotalar",
   "subscriptions.subtitle": "Codex, Grok ve Antigravity kotalarının merkezi görünümü; AGY için tek tıkla hesap değiştirme.",
+  "subscriptions.totalAccounts": "Toplam Hesap",
+  "subscriptions.agyAccounts": "AGY Hesapları",
   "subscriptions.refreshAll": "Tüm kotaları yenile",
   "subscriptions.refreshing": "Yenileniyor…",
   "subscriptions.lastUpdated": "Son güncelleme: {time}",

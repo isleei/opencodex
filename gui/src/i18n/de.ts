@@ -2818,6 +2818,8 @@ export const de: Record<TKey, string> = {
   "nav.subscriptions": "Abonnements",
   "subscriptions.title": "Abonnements & Kontingente",
   "subscriptions.subtitle": "Zentrale Übersicht über Kontingente für Codex, Grok und Antigravity mit 1-Klick-Kontowechsel für AGY.",
+  "subscriptions.totalAccounts": "Konten insgesamt",
+  "subscriptions.agyAccounts": "AGY-Konten",
   "subscriptions.refreshAll": "Alle Kontingente aktualisieren",
   "subscriptions.refreshing": "Aktualisiere…",
   "subscriptions.lastUpdated": "Zuletzt aktualisiert: {time}",

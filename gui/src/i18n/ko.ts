@@ -2840,6 +2840,8 @@ export const ko: Record<TKey, string> = {
   "nav.subscriptions": "구독 및 할당량",
   "subscriptions.title": "구독 및 할당량 관리",
   "subscriptions.subtitle": "Codex, Grok, Antigravity 구독 할당량을 한눈에 관리하고 AGY 멀티 계정을 원클릭으로 전환하세요.",
+  "subscriptions.totalAccounts": "총 계정 수",
+  "subscriptions.agyAccounts": "AGY 계정 수",
   "subscriptions.refreshAll": "모든 할당량 새로고침",
   "subscriptions.refreshing": "새로고침 중…",
   "subscriptions.lastUpdated": "마지막 업데이트: {time}",

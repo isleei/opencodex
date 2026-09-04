@@ -2855,6 +2855,8 @@ export const en = {
   "nav.subscriptions": "Subscriptions",
   "subscriptions.title": "Subscriptions & Quotas",
   "subscriptions.subtitle": "Unified overview of quotas for Codex, Grok, and Antigravity, with 1-click account switching for AGY.",
+  "subscriptions.totalAccounts": "Total Accounts",
+  "subscriptions.agyAccounts": "AGY Accounts",
   "subscriptions.refreshAll": "Refresh all quotas",
   "subscriptions.refreshing": "Refreshing…",
   "subscriptions.lastUpdated": "Last updated: {time}",

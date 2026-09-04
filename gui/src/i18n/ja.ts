@@ -2839,6 +2839,8 @@ export const ja: Record<TKey, string> = {
   "nav.subscriptions": "サブスクリプション",
   "subscriptions.title": "サブスクリプションとクォータ",
   "subscriptions.subtitle": "Codex、Grok、Antigravityのクォータを一元管理。AGYの複数アカウントをワンクリックで切り替え可能。",
+  "subscriptions.totalAccounts": "アカウント総数",
+  "subscriptions.agyAccounts": "AGY アカウント数",
   "subscriptions.refreshAll": "すべてのクォータを更新",
   "subscriptions.refreshing": "更新中…",
   "subscriptions.lastUpdated": "最終更新：{time}",

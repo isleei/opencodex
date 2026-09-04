@@ -2638,16 +2638,38 @@ export function setAntigravityAccountQuotaTransportForTests(dependencies: Provid
  */
 export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
   const url = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:fetchAvailableModels`;
-  const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(),
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ project: projectId }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  }, antigravityOutboundDependencies);
+  let response: Response;
+  try {
+    response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": antigravityUserAgent(),
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ project: projectId }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }, antigravityOutboundDependencies);
+  } catch {
+    // If pinned provider-outbound transport throws (e.g. Fake-IP / benchmark address
+    // 198.18.0.0/15 in TUN/transparent proxy environments where HTTP_PROXY is unset),
+    // fall back to direct fetch on Google's hardcoded Cloud Code Assist endpoint.
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": antigravityUserAgent(),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ project: projectId }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      return null;
+    }
+  }
   if (await providerRedirectError(response, url)) return null;
   if (!response.ok) return null;
   const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));

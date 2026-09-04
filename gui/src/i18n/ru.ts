@@ -2841,6 +2841,8 @@ export const ru: Record<TKey, string> = {
   "nav.subscriptions": "Подписки",
   "subscriptions.title": "Подписки и квоты",
   "subscriptions.subtitle": "Единый обзор квот для Codex, Grok и Antigravity с переключением аккаунтов AGY в 1 клик.",
+  "subscriptions.totalAccounts": "Всего аккаунтов",
+  "subscriptions.agyAccounts": "Аккаунты AGY",
   "subscriptions.refreshAll": "Обновить все квоты",
   "subscriptions.refreshing": "Обновление…",
   "subscriptions.lastUpdated": "Обновлено: {time}",

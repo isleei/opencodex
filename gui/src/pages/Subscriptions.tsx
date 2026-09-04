@@ -95,7 +95,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
         .catch(() => null);
 
       // 2. Fetch Codex accounts & quotas
-      const codexPromise = fetch(`${apiBase}/api/codex-auth/accounts?quota=1${isRefresh ? "&refresh=1" : ""}`)
+      const codexPromise = fetch(`${apiBase}/api/codex-auth/accounts${isRefresh ? "?refresh=1" : ""}`)
         .then(async r => (r.ok ? r.json() : null))
         .catch(() => null);
 
@@ -129,11 +129,17 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
       }
 
       // Handle Codex
-      if (codexRes && Array.isArray(codexRes)) {
-        const main = codexRes.find((a: any) => a.id === "__main__" || a.id === "main" || a.isMain);
-        const pool = codexRes.filter((a: any) => a !== main);
-        setCodexMain(main ?? codexRes[0] ?? null);
+      const codexAccounts = Array.isArray(codexRes)
+        ? codexRes
+        : (codexRes && Array.isArray(codexRes.accounts) ? codexRes.accounts : null);
+      if (codexAccounts) {
+        const main = codexAccounts.find((a: any) => a.id === "__main__" || a.id === "main" || a.isMain);
+        const pool = codexAccounts.filter((a: any) => a !== main);
+        setCodexMain(main ?? codexAccounts[0] ?? null);
         setCodexPool(pool);
+      } else {
+        setCodexMain(null);
+        setCodexPool([]);
       }
 
       // Handle Grok
@@ -301,14 +307,14 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
           </span>
         </div>
         <div className="sub-stat-card">
-          <span className="sub-stat-label">Total Accounts</span>
+          <span className="sub-stat-label">{t("subscriptions.totalAccounts")}</span>
           <span className="sub-stat-value">
             <IconServer width={20} height={20} style={{ color: "var(--primary)" }} />
             {totalAccounts}
           </span>
         </div>
         <div className="sub-stat-card">
-          <span className="sub-stat-label">AGY Accounts</span>
+          <span className="sub-stat-label">{t("subscriptions.agyAccounts")}</span>
           <span className="sub-stat-value" style={{ color: agyAccounts.length >= 4 ? "var(--primary)" : undefined }}>
             {agyAccounts.length}
           </span>
