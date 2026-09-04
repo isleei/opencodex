@@ -15,9 +15,10 @@ import Startup from "./pages/Startup";
 import SkillsMcp from "./pages/SkillsMcp";
 import Sessions from "./pages/Sessions";
 import Workflows from "./pages/Workflows";
+import Subscriptions from "./pages/Subscriptions";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconSparkles, IconTerminal, IconList, IconActivity, IconHardDrive, IconCloud, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconSparkles, IconTerminal, IconList, IconActivity, IconHardDrive, IconCloud, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconCreditCard } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession } from "./api";
@@ -33,6 +34,7 @@ type Theme = "light" | "dark" | "system";
 
 const PAGE_TKEY: Record<Page, TKey> = {
   dashboard: "nav.dashboard",
+  subscriptions: "nav.subscriptions",
   startup: "nav.startup",
   providers: "nav.providers",
   models: "nav.models",
@@ -72,6 +74,7 @@ type NavEntry = {
 const NAV: NavEntry[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "codex-set", tkey: "nav.codexSet", Icon: IconKey },
+  { id: "subscriptions", tkey: "nav.subscriptions", Icon: IconCreditCard },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
@@ -422,6 +425,7 @@ export default function App() {
                   <ConnectPairingForm target={targets.shared} onConnected={() => setSharedSessionReady(true)} />
                 )}
                 {page === "dashboard" && <Dashboard apiBase={sharedBase} />}
+                {page === "subscriptions" && <Subscriptions apiBase={sharedBase} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} />}

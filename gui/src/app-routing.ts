@@ -17,7 +17,8 @@ export type Page =
   | "cloud"
   | "codex-set"
   | "clients"
-  | "integrations";
+  | "integrations"
+  | "subscriptions";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -35,6 +36,7 @@ export const VALID_PAGES = new Set<Page>([
   "codex-set",
   "clients",
   "integrations",
+  "subscriptions",
 ]);
 
 export function readPageFromHash(hash?: string): Page {

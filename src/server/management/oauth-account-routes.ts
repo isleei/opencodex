@@ -322,6 +322,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
     }
+    if (provider === "google-antigravity") {
+      try {
+        const { syncAntigravityCredentialsToGemini } = await import("../../cli/agy");
+        await syncAntigravityCredentialsToGemini(body.accountId);
+      } catch {}
+    }
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);

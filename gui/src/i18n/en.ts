@@ -2851,6 +2851,24 @@ export const en = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+
+  "nav.subscriptions": "Subscriptions",
+  "subscriptions.title": "Subscriptions & Quotas",
+  "subscriptions.subtitle": "Unified overview of quotas for Codex, Grok, and Antigravity, with 1-click account switching for AGY.",
+  "subscriptions.refreshAll": "Refresh all quotas",
+  "subscriptions.refreshing": "Refreshing…",
+  "subscriptions.lastUpdated": "Last updated: {time}",
+  "subscriptions.agy.title": "Google Antigravity (AGY) Multi-Account Matrix",
+  "subscriptions.agy.desc": "{count} Google accounts configured. Click 'Set as Active' to switch and sync to local CLI and IDE.",
+  "subscriptions.agy.setActive": "Set as Active",
+  "subscriptions.agy.currentlyActive": "Currently Active",
+  "subscriptions.agy.switching": "Switching…",
+  "subscriptions.codex.title": "OpenAI Codex Subscription & Quota",
+  "subscriptions.codex.tickets": "Reset Credits: {count} available",
+  "subscriptions.grok.title": "xAI Grok Subscription & Quota",
+  "subscriptions.other.title": "Other Connected Subscriptions",
+  "subscriptions.noAccounts": "No logged-in accounts detected for this subscription",
+  "subscriptions.switchSuccess": "Switched active account to {account}",
 } as const;
 
 export type TKey = keyof typeof en;

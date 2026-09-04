@@ -1,0 +1,311 @@
+/* Subscriptions & Quota Management Styles */
+
+.sub-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+
+.sub-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.sub-header-left {
+  flex: 1;
+  min-width: 280px;
+}
+
+.sub-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sub-last-updated {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sub-stats-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.sub-stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sub-stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.sub-stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sub-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.sub-section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sub-section-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--foreground);
+}
+
+.sub-section-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* AGY Multi-Account Grid */
+.sub-agy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.sub-acct-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.sub-acct-card:hover {
+  border-color: var(--border-hover, var(--primary));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.sub-acct-card--active {
+  border-color: var(--primary);
+  background: var(--surface-raised, var(--surface));
+  box-shadow: 0 0 0 1px var(--primary), 0 4px 20px rgba(var(--primary-rgb, 59, 130, 246), 0.12);
+}
+
+.sub-acct-card--active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--primary);
+}
+
+.sub-acct-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sub-acct-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.sub-acct-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sub-acct-id {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.sub-acct-quota-box {
+  background: var(--background);
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 80px;
+  justify-content: center;
+}
+
+.sub-acct-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.sub-switch-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  transition: all 0.15s ease;
+}
+
+/* Overview Two-Column Stack for Codex & Grok */
+.sub-providers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.sub-provider-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+}
+
+.sub-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sub-provider-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sub-provider-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--foreground);
+}
+
+.sub-provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub-provider-plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-soft, var(--background));
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft, var(--border));
+}
+
+.sub-pool-account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft, var(--border));
+}
+
+.sub-pool-account-row:last-child {
+  border-bottom: none;
+}
+
+.sub-badge-active {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sub-spin {
+  animation: sub-spin-anim 1s linear infinite;
+}
+
+@keyframes sub-spin-anim {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 768px) {
+  .sub-agy-grid {
+    grid-template-columns: 1fr;
+  }
+  .sub-providers-grid {
+    grid-template-columns: 1fr;
+  }
+  .sub-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .sub-header-actions {
+    justify-content: space-between;
+  }
+}
