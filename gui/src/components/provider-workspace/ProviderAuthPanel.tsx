@@ -528,6 +528,9 @@ export default function ProviderAuthPanel({
                             threshold={80}
                             t={t}
                             layout="stacked"
+                            {...(item.name === "meta-muse" && account.quota
+                              ? { observedAt: account.quota.updatedAt }
+                              : {})}
                           />
                         ) : account.plan ? (
                           <p className="muted pwi-auth-acct-quota-stale">
