@@ -1,14 +1,17 @@
-/* Subscriptions & Quota Management Styles */
+/* ==========================================================================
+   Subscriptions & Cockpit Multi-Account Management Styles
+   ========================================================================== */
 
 .sub-shell {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  max-width: 1200px;
+  gap: 18px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding-bottom: 48px;
+  padding-bottom: 60px;
 }
 
+/* Header & Banner */
 .sub-header-row {
   display: flex;
   align-items: flex-start;
@@ -33,83 +36,269 @@
   color: var(--muted);
 }
 
-.sub-stats-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.sub-stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+/* Switch Alert Banner (Cockpit style) */
+.sub-alert-banner {
+  background: rgba(59, 130, 246, 0.09);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  color: #2563eb;
   border-radius: var(--radius-md);
-  padding: 14px 18px;
+  padding: 10px 16px;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 500;
+  animation: subFadeIn 0.2s ease-out;
 }
 
-.sub-stat-label {
-  font-size: 12px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
+.dark .sub-alert-banner {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #60a5fa;
 }
 
-.sub-stat-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--foreground);
+.sub-alert-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.7;
+  border-radius: 4px;
+}
+.sub-alert-close:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Platform Tabs (Cockpit category switcher) */
+.sub-tabs-strip {
   display: flex;
   align-items: center;
   gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
 }
 
-.sub-section {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.sub-tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
-.sub-section-header {
+.sub-tab-item:hover {
+  background: var(--surface);
+  color: var(--foreground);
+}
+
+.sub-tab-item.active {
+  background: var(--surface);
+  color: var(--primary);
+  border-color: var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.sub-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  line-height: 1.2;
+}
+
+.sub-tab-item.active .sub-tab-badge {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* Cockpit Toolbar */
+.sub-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
 }
 
-.sub-section-title-wrap {
+.sub-toolbar-left {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  flex: 1;
 }
 
-.sub-section-title {
-  font-size: 17px;
-  font-weight: 700;
-  margin: 0;
+.sub-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 220px;
+  max-width: 320px;
+  flex: 1;
+}
+
+.sub-search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.sub-search-input {
+  width: 100%;
+  padding: 6px 10px 6px 30px;
+  font-size: 13px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.sub-search-input:focus {
+  border-color: var(--primary);
+}
+
+.sub-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--background);
+}
+
+.sub-view-btn {
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sub-view-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.sub-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--background);
   color: var(--foreground);
 }
 
-.sub-section-desc {
-  font-size: 13px;
-  color: var(--muted);
-  margin: 0;
+/* Cockpit Badges */
+.cockpit-badge-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #10b981;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+  letter-spacing: 0.02em;
 }
 
-/* AGY Multi-Account Grid */
-.sub-agy-grid {
+.cockpit-badge-pro {
+  display: inline-flex;
+  align-items: center;
+  background: #2563eb;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.cockpit-badge-team {
+  display: inline-flex;
+  align-items: center;
+  background: #8b5cf6;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.cockpit-badge-grok {
+  display: inline-flex;
+  align-items: center;
+  background: #0284c7;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.cockpit-badge-ticket {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cockpit-badge-ticket:hover {
+  background: rgba(245, 158, 11, 0.22);
+}
+
+/* Cockpit Grid & Cards */
+.cockpit-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
 }
 
-.sub-acct-card {
+.cockpit-grid.cockpit-list {
+  grid-template-columns: 1fr;
+}
+
+.cockpit-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -118,194 +307,311 @@
   flex-direction: column;
   justify-content: space-between;
   gap: 14px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
   position: relative;
-  overflow: hidden;
+  transition: all 0.18s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.sub-acct-card:hover {
-  border-color: var(--border-hover, var(--primary));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+.cockpit-card:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
 }
 
-.sub-acct-card--active {
-  border-color: var(--primary);
-  background: var(--surface-raised, var(--surface));
-  box-shadow: 0 0 0 1px var(--primary), 0 4px 20px rgba(var(--primary-rgb, 59, 130, 246), 0.12);
+.cockpit-card.active {
+  border: 2px solid #3b82f6 !important;
+  box-shadow: 0 0 0 1px #3b82f6, 0 4px 14px rgba(59, 130, 246, 0.16) !important;
 }
 
-.sub-acct-card--active::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--primary);
-}
-
-.sub-acct-head {
+.cockpit-card-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.sub-acct-info {
+.cockpit-card-identity {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow: hidden;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
-.sub-acct-name {
+.cockpit-card-email {
   font-size: 14px;
   font-weight: 600;
   color: var(--foreground);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sub-acct-id {
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
-.sub-acct-quota-box {
-  background: var(--background);
-  border: 1px solid var(--border-soft, var(--border));
-  border-radius: var(--radius-md);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 80px;
-  justify-content: center;
-}
-
-.sub-acct-actions {
+.cockpit-card-subactions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.sub-switch-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  transition: all 0.15s ease;
 }
 
-/* Overview Two-Column Stack for Codex & Grok */
-.sub-providers-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 16px;
-}
-
-.sub-provider-card {
-  background: var(--surface);
+.cockpit-note-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
 }
-
-.sub-provider-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sub-provider-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.sub-provider-title {
-  font-size: 16px;
-  font-weight: 700;
-  margin: 0;
+.cockpit-note-btn:hover {
+  background: var(--surface-hover);
   color: var(--foreground);
 }
 
-.sub-provider-body {
+/* Dual-Column Quota Box for AGY (Claude on left, Gemini on right) */
+.cockpit-dual-quota-box {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
-.sub-provider-plan-row {
+.cockpit-dual-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.cockpit-dual-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cockpit-col-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--foreground);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  background: var(--surface-soft, var(--background));
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-soft, var(--border));
 }
 
-.sub-pool-account-row {
+.cockpit-quota-metric {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-soft, var(--border));
+  gap: 2px;
 }
 
-.sub-pool-account-row:last-child {
-  border-bottom: none;
+.cockpit-metric-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
 }
 
-.sub-badge-active {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  font-size: 11px;
+.cockpit-metric-label {
+  color: var(--muted);
   font-weight: 600;
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  display: inline-flex;
+}
+
+.cockpit-metric-val {
+  font-weight: 700;
+}
+
+.cockpit-metric-val.green {
+  color: #10b981;
+}
+
+.cockpit-metric-val.amber {
+  color: #f59e0b;
+}
+
+.cockpit-metric-val.red {
+  color: #ef4444;
+}
+
+.cockpit-progress-bg {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.cockpit-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.cockpit-progress-fill.green {
+  background: #10b981;
+}
+
+.cockpit-progress-fill.amber {
+  background: #f59e0b;
+}
+
+.cockpit-progress-fill.red {
+  background: #ef4444;
+}
+
+.cockpit-metric-time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.cockpit-credits-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+/* Card Bottom Footer Actions (Cockpit icons) */
+.cockpit-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cockpit-footer-actions {
+  display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.sub-spin {
-  animation: sub-spin-anim 1s linear infinite;
+.cockpit-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
 }
 
-@keyframes sub-spin-anim {
+.cockpit-icon-btn:hover:not(:disabled) {
+  background: var(--background);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+
+.cockpit-icon-btn.primary {
+  color: var(--primary);
+}
+
+.cockpit-icon-btn.primary:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Codex API Service Card */
+.cockpit-service-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.cockpit-service-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cockpit-service-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.cockpit-service-prop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.cockpit-service-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: monospace;
+  background: var(--background);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* Grok Notice Banner */
+.cockpit-grok-notice {
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--foreground);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cockpit-grok-notice-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: #2563eb;
+  font-size: 13px;
+}
+
+.dark .cockpit-grok-notice-title {
+  color: #60a5fa;
+}
+
+.cockpit-grok-notice ul {
+  margin: 4px 0 0 16px;
+  padding: 0;
+  color: var(--muted);
+}
+
+/* Animation */
+@keyframes subFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sub-spin {
+  animation: subSpin 1s linear infinite;
+}
+
+@keyframes subSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-@media (max-width: 768px) {
-  .sub-agy-grid {
-    grid-template-columns: 1fr;
-  }
-  .sub-providers-grid {
-    grid-template-columns: 1fr;
-  }
-  .sub-header-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .sub-header-actions {
-    justify-content: space-between;
-  }
 }
