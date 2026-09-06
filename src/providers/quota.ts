@@ -64,7 +64,7 @@ import {
   schedulePersistAccountQuotas,
 } from "./account-quota-disk";
 
-export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
+export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow, AgyModelQuota } from "./quota-types";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -275,7 +275,11 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
     || typeof quota.monthlyPercent === "number"
     || quota.creditsUsd?.unlimited === true
     || typeof quota.creditsUsd?.percent === "number"
-    || !!quota.customWindows?.some(window => typeof window.percent === "number");
+    || !!quota.customWindows?.some(window => typeof window.percent === "number")
+    // AGY display rows carry no routing signal on their own: an "other"-only
+    // payload has no canonical window, but its per-model readings are still
+    // real display data and must not be dropped by report().
+    || !!quota.agyModels?.some(model => typeof model.percent === "number");
 }
 
 function providerLabel(providerId: string): string {
@@ -1983,7 +1987,13 @@ async function fetchAccountQuota(
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
   const cached = accountQuotaCache.get(key);
-  if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) return cached;
+  // A transient AGY probe failure must not hide a recovered account for the
+  // ten-minute success TTL. Keep negative caching to avoid a retry storm.
+  const cacheTtl = provider === "google-antigravity" && cached?.unavailable
+    ? 30_000
+    : ACCOUNT_QUOTA_TTL_MS;
+  const legacyAgyCatalog = provider === "google-antigravity" && cached?.quota && !cached.unavailable && !cached.quota.agyQuotaGroups;
+  if (!forceRefresh && cached && !legacyAgyCatalog && Date.now() - cached.ts < cacheTtl) return cached;
   const joinable = accountQuotaInflight.get(key);
   if (joinable) return joinable;
 
@@ -2544,81 +2554,45 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
   return built ? { ...built, reverseEngineered: true } : null;
 }
 
-function quotaInfoEntries(modelInfo: Record<string, unknown>): Record<string, unknown>[] {
-  const entries: Record<string, unknown>[] = [];
-  const add = (value: unknown, tier?: string) => {
-    const rec = asRecord(value);
-    if (!rec) return;
-    entries.push(tier ? { ...rec, tier } : rec);
-  };
-  const addArray = (value: unknown) => {
-    if (!Array.isArray(value)) return;
-    for (const entry of value) add(entry);
-  };
-
-  if (Array.isArray(modelInfo.quotaInfo)) addArray(modelInfo.quotaInfo);
-  else add(modelInfo.quotaInfo);
-  addArray(modelInfo.quotaInfos);
-
-  const byTier = asRecord(modelInfo.quotaInfoByTier);
-  if (byTier) {
-    for (const [tier, value] of Object.entries(byTier)) {
-      if (Array.isArray(value)) {
-        for (const entry of value) add(entry, tier);
-      } else {
-        add(value, tier);
-      }
-    }
-  }
-  return entries;
-}
-
-function classifyAntigravityFamily(modelId: string, modelInfo: Record<string, unknown>, quotaInfo: Record<string, unknown>): "Gem" | "Cla" | null {
-  const displayName = typeof modelInfo.displayName === "string" ? modelInfo.displayName : "";
-  const tier = typeof quotaInfo.tier === "string" ? quotaInfo.tier : "";
-  const haystack = `${modelId} ${displayName} ${tier}`.toLowerCase();
-  if (haystack.includes("gemini")) return "Gem";
-  if (haystack.includes("claude") || haystack.includes("opus") || haystack.includes("sonnet") || haystack.includes("gpt-oss") || haystack.includes("gpt_oss")) return "Cla";
-  return null;
-}
-
-function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | undefined {
-  const remaining = normalizePercent(toFiniteNumber(quotaInfo.remainingFraction) !== undefined
-    ? toFiniteNumber(quotaInfo.remainingFraction)! * 100
-    : toFiniteNumber(quotaInfo.remainingPercentage) !== undefined
-      ? toFiniteNumber(quotaInfo.remainingPercentage)! * 100
-      : undefined);
-  if (remaining === undefined) return undefined;
-  return normalizePercent(100 - remaining);
-}
-
-/** Gem/Cla windows from a `fetchAvailableModels` body; shared by the provider and account probes. */
-function antigravityWindowsFromModels(body: Record<string, unknown> | null): ProviderQuotaWindow[] {
-  const models = asRecord(body?.models);
-  if (!models) return [];
-
-  const windows = new Map<string, ProviderQuotaWindow>();
-  for (const [modelId, rawModelInfo] of Object.entries(models)) {
-    const modelInfo = asRecord(rawModelInfo);
-    if (!modelInfo) continue;
-    for (const quotaInfo of quotaInfoEntries(modelInfo)) {
-      const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
-      const percent = antigravityUsedPercent(quotaInfo);
-      if (percent === undefined) continue;
-      windows.set(label, {
-        label,
-        percent,
-        ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
+/** The model catalog may say 100% while the weekly subscription is spent.
+ * Accept only the four explicit subscription buckets; never synthesize a
+ * missing bucket from model availability, reset dates, or another account. */
+function antigravitySubscriptionQuota(body: unknown): ProviderQuota | null {
+  const groups = asRecord(body)?.groups;
+  if (!Array.isArray(groups)) return null;
+  const buckets = new Map<string, { window: "weekly" | "5h"; percent: number; resetAt?: number }>();
+  for (const rawGroup of groups) {
+    const rawBuckets = asRecord(rawGroup)?.buckets;
+    if (!Array.isArray(rawBuckets)) continue;
+    for (const raw of rawBuckets) {
+      const bucket = asRecord(raw);
+      if (!bucket || typeof bucket.bucketId !== "string") continue;
+      const match = /^(gemini|3p)-(weekly|5h)$/.exec(bucket.bucketId);
+      if (!match) continue;
+      if (buckets.has(bucket.bucketId) || bucket.window !== match[2]) return null;
+      const fraction = toFiniteNumber(bucket.remainingFraction);
+      if (fraction === undefined || fraction < 0 || fraction > 1) return null;
+      const resetAt = normalizeResetAt(bucket.resetTime);
+      buckets.set(bucket.bucketId, {
+        window: match[2] as "weekly" | "5h",
+        percent: 100 - fraction * 100,
+        ...(resetAt !== undefined ? { resetAt } : {}),
       });
     }
   }
-
-  const customWindows = ["Gem", "Cla"].flatMap(label => {
-    const window = windows.get(label);
-    return window ? [window] : [];
+  if (buckets.size !== 4) return null;
+  const agyQuotaGroups: import("./quota-types").AgyQuotaGroup[] = [
+    { id: "gemini", windows: [buckets.get("gemini-weekly")!, buckets.get("gemini-5h")!] },
+    { id: "claude-gpt", windows: [buckets.get("3p-weekly")!, buckets.get("3p-5h")!] },
+  ];
+  // Both limits constrain availability. Keep the canonical family labels,
+  // taking the most consumed window instead of an arbitrary catalog model.
+  const customWindows = agyQuotaGroups.map(group => {
+    const limiting = group.windows.reduce((a, b) => a.percent >= b.percent ? a : b);
+    return { label: group.id === "gemini" ? "Gem" : "Cla", percent: limiting.percent,
+      ...(limiting.resetAt !== undefined ? { resetAt: limiting.resetAt } : {}) };
   });
-  return customWindows;
+  return { agyQuotaGroups, customWindows, updatedAt: Date.now() };
 }
 
 const ANTIGRAVITY_ACCOUNT_QUOTA_BASE = "https://daily-cloudcode-pa.googleapis.com";
@@ -2637,7 +2611,7 @@ export function setAntigravityAccountQuotaTransportForTests(dependencies: Provid
  * A redirect or non-2xx yields null (unavailable), never a partial row.
  */
 export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
-  const url = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:fetchAvailableModels`;
+  const url = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:retrieveUserQuotaSummary`;
   let response: Response;
   try {
     response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
@@ -2672,9 +2646,7 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
   }
   if (await providerRedirectError(response, url)) return null;
   if (!response.ok) return null;
-  const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
-  if (customWindows.length === 0) return null;
-  return { customWindows, updatedAt: Date.now() };
+  return antigravitySubscriptionQuota(await readQuotaJson(response));
 }
 
 async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
@@ -2687,7 +2659,7 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || ANTIGRAVITY_ACCOUNT_QUOTA_BASE).replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
+  const response = await fetch(`${baseUrl}/v1internal:retrieveUserQuotaSummary`, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -2699,12 +2671,8 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
-  const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
-  if (customWindows.length === 0) return null;
-  return report(provider, "google-antigravity:fetchAvailableModels", {
-    customWindows,
-    updatedAt: Date.now(),
-  });
+  const quota = antigravitySubscriptionQuota(await readQuotaJson(response));
+  return quota ? report(provider, "google-antigravity:retrieveUserQuotaSummary", quota) : null;
 }
 
 async function maybeFetchProviderQuota(

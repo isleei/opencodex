@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   fetchProviderAccountQuotas,
   fetchProviderQuotaReports,
   getCachedProviderAccountQuota,
+  setCachedProviderAccountQuotaForTests,
   reconcileProviderAccountQuotaRows,
   resetProviderQuotaReconcileStateForTests,
   supportsPerAccountQuota,
@@ -483,15 +484,62 @@ describe("google-antigravity per-account quota (#1082)", () => {
   const idFor = (email: string) => getAccountSet("google-antigravity")!.accounts.find(a => a.credential.email === email)!.id;
 
   function antigravityBody(gemRemaining: number, claRemaining: number): string {
-    return JSON.stringify({
-      models: {
-        "gemini-3.7-flash": { displayName: "Gemini 3.7 Flash", quotaInfo: { remainingFraction: gemRemaining, resetTime: "2026-09-02T12:00:00Z" } },
-        "claude-opus-5": { displayName: "Claude Opus 5", quotaInfo: { remainingFraction: claRemaining, resetTime: "2026-09-02T18:00:00Z" } },
-      },
-    });
+    return JSON.stringify({ groups: [
+      { buckets: [
+        { bucketId: "gemini-weekly", window: "weekly", remainingFraction: gemRemaining, resetTime: "2026-09-02T12:00:00Z" },
+        { bucketId: "gemini-5h", window: "5h", remainingFraction: 1 },
+      ] },
+      { buckets: [
+        { bucketId: "3p-weekly", window: "weekly", remainingFraction: claRemaining, resetTime: "2026-09-02T18:00:00Z" },
+        { bucketId: "3p-5h", window: "5h", remainingFraction: 1 },
+      ] },
+    ] });
   }
 
   afterEach(() => setAntigravityAccountQuotaTransportForTests(null));
+
+  test("a fresh legacy all-full catalog cache is replaced by subscription data", async () => {
+    await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires: Date.now() + 3600000, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+    setCachedProviderAccountQuotaForTests("google-antigravity", idFor("a@example.com"), {
+      updatedAt: Date.now(), customWindows: [{ label: "Gem", percent: 0 }],
+      agyModels: [{ modelId: "gemini-a", family: "Gem", percent: 0 }],
+    });
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async () => new Response(antigravityBody(0.4, 0.7)),
+    });
+    const row = (await fetchProviderAccountQuotas("google-antigravity"))[0]!;
+    expect(row.quota?.agyQuotaGroups?.[0]?.windows[0]?.percent).toBe(60);
+    expect(row.quota?.agyModels).toBeUndefined();
+  });
+
+  test("AGY recovers after a short failure cache while healthy accounts stay cached", async () => {
+    const now = Date.now();
+    await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires: now + 3600000, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+    let calls = 0;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async () => ++calls === 1
+        ? new Response("temporarily unavailable", { status: 503 })
+        : new Response(antigravityBody(0.8, 0.4)),
+    });
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect((await fetchProviderAccountQuotas("google-antigravity"))[0]!.unavailable).toBe(true);
+      clock.mockReturnValue(now + 29000);
+      expect((await fetchProviderAccountQuotas("google-antigravity"))[0]!.unavailable).toBe(true);
+      expect(calls).toBe(1);
+      clock.mockReturnValue(now + 31000);
+      const recovered = (await fetchProviderAccountQuotas("google-antigravity"))[0]!;
+      expect(recovered.unavailable).toBeUndefined();
+      expect(recovered.quota?.agyQuotaGroups?.[0]?.windows[0]?.percent).toBe(20);
+      clock.mockReturnValue(now + 62000);
+      await fetchProviderAccountQuotas("google-antigravity");
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   test("probes each account with its own bearer and project id on the fixed Google host over the pinned transport", async () => {
     const expires = Date.now() + 60 * 60_000;
@@ -521,7 +569,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
     expect(seen.map(s => `${s.auth}|${s.project}`).sort()).toEqual(["Bearer agy-first|proj-first", "Bearer agy-second|proj-second"]);
     for (const s of seen) {
-      expect(s.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+      expect(s.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
       expect(s.address).toBe("142.250.0.1");
     }
   });

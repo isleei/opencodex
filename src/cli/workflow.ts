@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { WORKFLOW_AGENTS, type WorkflowAgent } from "../workflow/types";
 /**
  * `ocx workflow` — Codex-led workflow engine CLI.
  *
@@ -28,12 +30,12 @@ import {
 import type { WorkflowDefinition, WorkflowPhaseState, WorkflowTask } from "../workflow/types";
 
 const USAGE = `Usage:
-  ocx workflow go "<one-line description>" [--workflow <id>] [--model <ref>] [--json]
+  ocx workflow go "<one-line description>" [--workflow <id>] [--model <ref>] [--set role=model-ref]... [--agent <cli>] [--workspace <dir>] [--base <revision>] [--json]
       One-command start: picks the workflow, binds your default model, executes
       automatically, and stops at the first approval gate.
   ocx workflow list [--json]
   ocx workflow show <workflow-id> [--json]
-  ocx workflow run <workflow-id> --title <title> [--set role=model-ref]... [--workspace <dir>] [--json]
+  ocx workflow run <workflow-id> --title <title> [--set role=model-ref]... [--workspace <dir>] [--agent <cli>] [--base <revision>] [--auto] [--json]
   ocx workflow runs [--json]
   ocx workflow status <task-id> [--json]
   ocx workflow advance <task-id> [--outputs <text>] [--json]
@@ -158,12 +160,20 @@ function collectSetFlags(args: string[]): Record<string, string> {
   return overrides;
 }
 
+function takeAgent(args: string[]): WorkflowAgent | undefined {
+  const agent = takeOption(args, "--agent");
+  if (agent && !WORKFLOW_AGENTS.includes(agent as WorkflowAgent)) throw new CliUsageError(`--agent must be one of ${WORKFLOW_AGENTS.join(", ")}`, USAGE);
+  return agent as WorkflowAgent | undefined;
+}
+
 async function run(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const auto = takeFlag(args, "--auto");
   const title = takeOption(args, "--title");
-  const workspace = takeOption(args, "--workspace");
+  const workspace = resolve(takeOption(args, "--workspace") || process.cwd());
+  const agent = takeAgent(args);
+  const baseRevision = takeOption(args, "--base");
   const roleOverrides = collectSetFlags(args);
   const workflowId = args.shift();
   rejectArgs(args, USAGE);
@@ -175,7 +185,7 @@ async function run(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workflowId, title, workspaceDir: workspace, roleOverrides, auto }),
+      body: JSON.stringify({ workflowId, title, requirements: title, workspaceDir: workspace, roleOverrides, agentOverrides: agent ? { worker: agent } : undefined, baseRevision, auto }),
     },
     deps,
   );
@@ -206,6 +216,7 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 
   const result = await runtimeRequest<{
     task: WorkflowTask;
+    executing?: boolean;
     definition: WorkflowDefinition;
     journal: Array<{ ts: number; event: string; phaseId?: string; detail?: string }>;
   }>(`/api/workflows/runs/${encodeURIComponent(taskId)}`, {}, deps);
@@ -355,6 +366,10 @@ async function go(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const wantsJson = takeFlag(args, "--json");
   const workflowId = takeOption(args, "--workflow");
   const modelRef = takeOption(args, "--model");
+  const workspaceDir = resolve(takeOption(args, "--workspace") || process.cwd());
+  const baseRevision = takeOption(args, "--base");
+  const agent = takeAgent(args);
+  const roleOverrides = collectSetFlags(args);
   // The description is the whole positional tail — everything left after flags.
   const description = args.join(" ").trim();
   args.length = 0;
@@ -366,7 +381,7 @@ async function go(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ description, workflowId, modelRef }),
+      body: JSON.stringify({ description, workflowId, modelRef, workspaceDir, baseRevision, roleOverrides, agentOverrides: agent ? { worker: agent } : undefined }),
     },
     deps,
   );

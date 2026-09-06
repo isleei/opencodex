@@ -487,3 +487,65 @@
   font-size: 11.5px;
   color: var(--muted);
 }
+
+/* Conversation entry and monitoring. */
+.workflows-chat-entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px;
+  background: var(--raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+}
+.workflows-chat-entry p, .workflows-advance-box p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.workflows-chat-entry blockquote {
+  margin: 12px 0 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--blue);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.workflows-chat-entry > button { flex-shrink: 0; }
+.workflows-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.workflows-history-toggle { font-size: 12px; color: var(--muted); }
+.workflows-history-toggle input { margin-right: 6px; }
+.workflows-templates summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  padding-bottom: 12px;
+}
+.workflows-templates > button { margin-bottom: 12px; }
+.workflows-layout { grid-template-columns: minmax(0, 1fr); }
+.workflows-run-main { flex: 1; }
+.workflows-run-title { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .workflows-chat-entry { flex-direction: column; }
+  .workflows-list-heading { flex-wrap: wrap; }
+}
+
+.workflows-template-picker { padding: 18px; border: 1px solid var(--border-soft); border-radius: 12px; }
+.workflows-template-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
+.workflows-template-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.workflows-template-option { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 14px; border: 1px solid var(--border-soft); background: var(--raised); color: var(--text); border-radius: 10px; cursor: pointer; }
+.workflows-template-option.active { border-color: var(--blue); background: var(--blue-soft); }
+.workflows-template-option code, .workflows-template-option > span { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.workflows-template-config { margin-top: 16px; }
+.workflows-template-roles { display: flex; flex-wrap: wrap; gap: 12px; }
+.workflows-template-role { flex: 1 1 180px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; padding: 12px; background: var(--raised); border-radius: 8px; min-width: 0; }
+.workflows-template-role span, .workflows-template-role code { color: var(--muted); overflow-wrap: anywhere; }
+.workflows-editor-advanced > summary { cursor: pointer; margin: 16px 0 12px; }
+.workflows-editor-role-row { flex-wrap: wrap; }
+.workflows-editor-role-row select { max-width: 150px; padding: 6px; background: var(--raised); color: var(--text); border: 1px solid var(--border-soft); border-radius: 6px; }

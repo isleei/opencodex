@@ -6,12 +6,13 @@
  * `role:<name>` indirection resolved through definition defaults and task overrides),
  * an execution mode, and an optional operator gate that halts the run.
  *
- * W1 scope: state machine, persistence, REST, CLI. Phase *execution* (proxied chat
- * calls and headless `codex exec` dispatch) is W2 — advancing a phase records outputs
- * supplied by the operator or the orchestrating agent.
+ * Chat phases use the proxy; agent phases use a selected native CLI. Each run
+ * snapshots its definition, requirements, workspace and review baseline.
  */
 
 export type WorkflowPhaseMode = "chat" | "agent";
+export const WORKFLOW_AGENTS = ["codex", "agy", "grok", "opencode", "claude"] as const;
+export type WorkflowAgent = typeof WORKFLOW_AGENTS[number];
 
 export interface WorkflowGate {
   /** Stable gate id (e.g. `plan-approval`). */
@@ -30,9 +31,11 @@ export interface WorkflowPhase {
   modelRef?: string;
   /** `chat` = proxied model call; `agent` = headless tool-loop run in the task workspace. */
   mode?: WorkflowPhaseMode;
+  /** CLI used for agent mode; independent of the selected model. */
+  agent?: WorkflowAgent;
   /** Inline prompt template for the phase. */
   prompt?: string;
-  /** Documentation of expected inputs (e.g. ["diff", "plan"]). */
+  /** Prior phase outputs or reserved requirements/diff inputs (e.g. ["diff", "plan"]). */
   inputs?: string[];
 }
 
@@ -68,6 +71,10 @@ export interface WorkflowPhaseState {
   outputs?: string;
   /** Set when automated execution failed; the phase stays in_progress for a retry. */
   error?: string;
+  /** New identity every time a phase is entered, including rework. */
+  attemptId?: string;
+  /** Exact repository evidence sent to this phase. */
+  evidence?: { baseRevision: string; headRevision: string; diff: string };
   /** Token usage captured from an automated chat execution. */
   tokens?: WorkflowPhaseTokens;
 }
@@ -81,12 +88,18 @@ export interface WorkflowTask {
   id: string;
   workflowId: string;
   title: string;
+  requirements?: string;
+  /** Immutable definition for this run; legacy runs fall back to the stored definition. */
+  definition?: WorkflowDefinition;
   status: WorkflowTaskStatus;
   /** Index into `phases` for the current or next actionable phase. */
   phaseIndex: number;
   phases: WorkflowPhaseState[];
   /** Role name -> modelRef pinned at run start; wins over definition defaults. */
   roleOverrides?: Record<string, string>;
+  agentOverrides?: Record<string, WorkflowAgent>;
+  baseRevision?: string;
+  rework?: { targetPhaseId: string; note?: string; phases: WorkflowPhaseState[] };
   /** When true, advance/gate automatically re-kick execution after a manual phase. */
   autoRun?: boolean;
   workspaceDir?: string;

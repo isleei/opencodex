@@ -210,12 +210,22 @@ export interface ProviderQuotaWindowDto {
   label: string;
   percent: number;
   resetAt?: number;
+  modelId?: string;
+}
+
+export interface AgyModelQuotaDto {
+  modelId: string;
+  displayName?: string;
+  family: string;
+  percent: number;
+  resetAt?: number;
 }
 
 export interface ProviderQuotaDto extends CodexQuotaDto {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   customWindows?: ProviderQuotaWindowDto[];
+  agyModels?: AgyModelQuotaDto[];
   updatedAt?: number;
 }
 

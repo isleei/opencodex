@@ -246,27 +246,17 @@ describe("fetchProviderQuotaReports", () => {
           billingCycleEnd: "2026-08-01T00:00:00.000Z",
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
-        return new Response(JSON.stringify({
-          models: {
-            "gemini-3.6-flash-medium": {
-              displayName: "Gemini 3.6 Flash (Medium)",
-              quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
-            },
-            "claude-sonnet-4.6": {
-              displayName: "Claude Sonnet",
-              quotaInfoByTier: {
-                sonnet: { remainingFraction: 0.21, resetTime: "2026-07-05T15:00:00Z" },
-              },
-            },
-            autocomplete: {
-              displayName: "Autocomplete",
-              quotaInfo: { remainingFraction: 0.01, resetTime: "2026-07-05T16:00:00Z" },
-            },
-          },
-          rawProject: "agy-project-secret",
-          rawToken: "agy-access-secret",
-        }), { status: 200, headers: { "content-type": "application/json" } });
+      if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary") {
+        return Response.json({ groups: [
+          { buckets: [
+            { bucketId: "gemini-weekly", window: "weekly", remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
+            { bucketId: "gemini-5h", window: "5h", remainingFraction: 1 },
+          ] },
+          { buckets: [
+            { bucketId: "3p-weekly", window: "weekly", remainingFraction: 0.21, resetTime: "2026-07-05T15:00:00Z" },
+            { bucketId: "3p-5h", window: "5h", remainingFraction: 1 },
+          ] },
+        ], rawProject: "agy-project-secret", rawToken: "agy-access-secret" });
       }
       if (url === "https://api.kimi.com/coding/v1/usages") {
         return new Response(JSON.stringify({
@@ -302,6 +292,9 @@ describe("fetchProviderQuotaReports", () => {
       { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },
     ]);
+    expect(byProvider["google-antigravity"]?.source).toBe("google-antigravity:retrieveUserQuotaSummary");
+    expect(byProvider["google-antigravity"]?.quota.agyQuotaGroups?.map(g => g.id)).toEqual(["gemini", "claude-gpt"]);
+    expect(byProvider["google-antigravity"]?.quota.agyModels).toBeUndefined();
     expect(byProvider.cursor?.source).toBe("cursor:period-usage");
     expect(byProvider.cursor?.reverseEngineered).toBe(true);
     expect(byProvider.cursor?.quota.monthlyPercent).toBe(30);

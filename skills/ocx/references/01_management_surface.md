@@ -1004,7 +1004,11 @@ One-command start: classify the task, bind the default model, execute to the fir
 | Flag | Value | Meaning |
 |---|---|---|
 | `--workflow` | string | Force a specific workflow definition. |
-| `--model` | string | Bind every unpinned role to this model ref. |
+| `--model` | string | Fallback for roles without a task override or definition default. |
+| `--set` | string | Pin a role to a model ref (repeatable, role=model-ref). |
+| `--workspace` | string | Project directory (defaults to the CLI working directory). |
+| `--base` | string | Git base revision for review (defaults to HEAD at run creation). |
+| `--agent` | string | Worker CLI: codex, agy, grok, opencode, or claude. |
 | `--json` | boolean | Emit the started run as JSON. |
 
 JSON mode: `payload`.
@@ -1035,7 +1039,9 @@ Start a run of a workflow definition.
 |---|---|---|
 | `--title` | string | Human title for the run. |
 | `--set` | string | Pin a role to a model ref (repeatable, role=model-ref). |
-| `--workspace` | string | Working directory for agent-mode phases. |
+| `--workspace` | string | Project directory (defaults to the CLI working directory). |
+| `--base` | string | Git base revision for review (defaults to HEAD at run creation). |
+| `--agent` | string | Worker CLI: codex, agy, grok, opencode, or claude. |
 | `--auto` | boolean | Execute phases automatically until the next gate or completion. |
 | `--json` | boolean | Emit the started run as JSON. |
 

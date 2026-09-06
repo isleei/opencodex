@@ -290,7 +290,7 @@
 /* Cockpit Grid & Cards */
 .cockpit-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
   gap: 16px;
 }
 
@@ -299,6 +299,7 @@
 }
 
 .cockpit-card {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

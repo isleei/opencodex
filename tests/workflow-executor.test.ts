@@ -156,7 +156,9 @@ describe("Workflow execution, injection, and skill (W2/W4)", () => {
     let layer = store.layers?.find(l => l.id === "wflow1");
     expect(layer?.body).toContain("<ocx-workflow>");
     expect(layer?.body).toContain(`run: ${task.id}`);
-    expect(layer?.body).toContain("ocx workflow advance");
+    expect(layer?.body).toContain(`ocx workflow status ${task.id} --json`);
+    expect(layer?.body).toContain("wait while execution is active");
+    expect(layer?.body).not.toContain("ocx workflow advance");
 
     advanceRun(task.id, {}, injBase);
     syncWorkflowLayer(injBase, paths);

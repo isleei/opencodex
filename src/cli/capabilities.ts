@@ -795,7 +795,11 @@ export const CAPABILITIES: readonly Capability[] = [
     routes: [{ method: "POST", path: "/api/workflows/go" }],
     flags: [
       { name: "--workflow", value: "string", summary: "Force a specific workflow definition." },
-      { name: "--model", value: "string", summary: "Bind every unpinned role to this model ref." },
+      { name: "--model", value: "string", summary: "Fallback for roles without a task override or definition default." },
+      { name: "--set", value: "string", summary: "Pin a role to a model ref (repeatable, role=model-ref)." },
+      { name: "--workspace", value: "string", summary: "Project directory (defaults to the CLI working directory)." },
+      { name: "--base", value: "string", summary: "Git base revision for review (defaults to HEAD at run creation)." },
+      { name: "--agent", value: "string", summary: "Worker CLI: codex, agy, grok, opencode, or claude." },
       { name: "--json", value: "boolean", summary: "Emit the started run as JSON." },
     ],
     mutates: true,
@@ -834,7 +838,9 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [
       { name: "--title", value: "string", required: true, summary: "Human title for the run." },
       { name: "--set", value: "string", summary: "Pin a role to a model ref (repeatable, role=model-ref)." },
-      { name: "--workspace", value: "string", summary: "Working directory for agent-mode phases." },
+      { name: "--workspace", value: "string", summary: "Project directory (defaults to the CLI working directory)." },
+      { name: "--base", value: "string", summary: "Git base revision for review (defaults to HEAD at run creation)." },
+      { name: "--agent", value: "string", summary: "Worker CLI: codex, agy, grok, opencode, or claude." },
       { name: "--auto", value: "boolean", summary: "Execute phases automatically until the next gate or completion." },
       { name: "--json", value: "boolean", summary: "Emit the started run as JSON." },
     ],

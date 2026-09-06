@@ -23,7 +23,8 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         id: "plan",
         title: "Write the implementation plan",
         modelRef: "role:planner",
-        mode: "chat",
+        mode: "agent",
+        agent: "codex",
         inputs: ["requirements"],
         prompt:
           "Write a step-by-step implementation plan for the task. List the files you intend to touch, the riskiest part, and how you will verify the result. Do not implement anything.",
@@ -52,9 +53,9 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         title: "Independent review of the diff",
         modelRef: "role:reviewer",
         mode: "chat",
-        inputs: ["diff", "plan"],
+        inputs: ["diff", "plan", "implement", "verify"],
         prompt:
-          "Review the current diff against the plan. Report blockers, risks, and nits as separate lists. Do not restate the plan.",
+          "Review the actual code changes against the original requirements and plan. Challenge incorrect assumptions in the plan; distinguish observed test evidence from unverified claims. Report blockers, risks, and nits as separate lists. Do not restate the plan.",
       },
       { id: "accept-review", title: "Review acceptance", gate: { id: "review-acceptance", rejectTo: "implement" } },
       {
@@ -62,6 +63,7 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         title: "Summarize the run",
         modelRef: "role:planner",
         mode: "chat",
+        inputs: ["plan", "implement", "verify", "review"],
         prompt: "Summarize what was delivered, what the review found, and any follow-up work.",
       },
     ],
@@ -77,6 +79,7 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
       {
         id: "collect-diff",
         title: "Collect the diff under review",
+        modelRef: "role:planner",
         mode: "chat",
         inputs: ["diff"],
         prompt: "State the scope under review and list the changed files.",
@@ -129,7 +132,7 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         title: "Root-cause diagnosis",
         modelRef: "role:planner",
         mode: "chat",
-        inputs: ["reproduction"],
+        inputs: ["reproduce"],
         prompt: "Name the root cause, the evidence for it, and the smallest safe fix. Do not fix yet.",
       },
       {
@@ -137,7 +140,7 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         title: "Apply the fix",
         modelRef: "role:worker",
         mode: "agent",
-        inputs: ["diagnosis"],
+        inputs: ["diagnose"],
         prompt: "Apply the diagnosed fix. Smallest change that addresses the root cause.",
       },
       {
@@ -152,7 +155,7 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
         title: "Review the fix",
         modelRef: "role:reviewer",
         mode: "chat",
-        inputs: ["diff", "diagnosis"],
+        inputs: ["diff", "diagnose", "fix", "verify"],
         prompt: "Review the fix against the diagnosis. Blockers, risks, nits.",
       },
       { id: "accept", title: "Acceptance", gate: { id: "fix-acceptance", rejectTo: "fix" } },

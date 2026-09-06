@@ -155,6 +155,16 @@ export default function WorkflowEditor({
           {Array.from(roleKeys).map(role => (
             <div key={role} className="workflows-editor-role-row">
               <span className="mono">{role}</span>
+              {def.phases.some(phase => phase.mode === "agent" && phase.modelRef === `role:${role}`) && <select
+                aria-label={t("workflows.templates.roleTool", { role })}
+                value={(() => { const agents = new Set(def.phases.filter(phase => phase.mode === "agent" && phase.modelRef === `role:${role}`).map(phase => phase.agent ?? "codex")); return agents.size === 1 ? Array.from(agents)[0] : ""; })()}
+                onChange={e => {
+                  const agent = e.target.value as WorkflowPhase["agent"];
+                  setDef(prev => ({ ...prev, phases: prev.phases.map(phase => phase.mode === "agent" && phase.modelRef === `role:${role}` ? { ...phase, agent } : phase) }));
+                }}>
+                <option value="" disabled>{t("workflows.templates.perPhase")}</option>
+                <option value="codex">Codex</option><option value="agy">AGY</option><option value="grok">Grok</option><option value="opencode">OpenCode</option><option value="claude">Claude Code</option>
+              </select>}
               <input
                 type="text"
                 className="mono"
@@ -172,7 +182,7 @@ export default function WorkflowEditor({
           ))}
           {roleKeys.size === 0 && <p className="workflows-editor-hint">{t("workflows.editor.noRoles")}</p>}
 
-          <div className="workflows-editor-section">{t("workflows.editor.phases")}</div>
+          <details className="workflows-editor-advanced"><summary>{t("workflows.editor.phases")}</summary>
           {def.phases.map((phase, i) => (
             <div key={i} className="workflows-editor-phase">
               <div className="workflows-editor-phase-row">
@@ -192,7 +202,7 @@ export default function WorkflowEditor({
                       patchPhase(i, { gate: { id: phase.gate?.id || `${phase.id}-gate` }, modelRef: undefined });
                     } else {
                       const { gate: _g, ...rest } = phase;
-                      patchPhase(i, { ...rest, mode: v as "chat" | "agent" });
+                      patchPhase(i, { ...rest, gate: undefined, mode: v as "chat" | "agent" });
                     }
                   }}
                 >
@@ -209,6 +219,14 @@ export default function WorkflowEditor({
                     value={phase.modelRef ?? ""}
                     onChange={e => patchPhase(i, { modelRef: e.target.value })}
                   />
+                )}
+                {!phase.gate && phase.mode === "agent" && (
+                  <label className="workflows-field">
+                    {t("workflows.agent")}
+                    <select value={phase.agent ?? "codex"} onChange={e => patchPhase(i, { agent: e.target.value as WorkflowPhase["agent"] })}>
+                      {["codex", "agy", "grok", "opencode", "claude"].map(agent => <option key={agent} value={agent}>{agent}</option>)}
+                    </select>
+                  </label>
                 )}
                 <div className="workflows-editor-phase-actions">
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => movePhase(i, -1)} disabled={i === 0}>↑</button>
@@ -259,6 +277,7 @@ export default function WorkflowEditor({
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(false)}>{t("workflows.editor.addPhase")}</button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => addPhase(true)}>{t("workflows.editor.addGate")}</button>
           </div>
+          </details>
         </div>
 
         <div className="modal-footer">

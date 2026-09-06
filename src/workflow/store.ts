@@ -10,11 +10,12 @@
  * `OPENCODEX_HOME`, or isolate further with an explicit `baseDir`.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { BUILTIN_WORKFLOWS } from "./builtins";
-import type { WorkflowDefinition, WorkflowJournalEntry, WorkflowTask } from "./types";
+import { WORKFLOW_AGENTS, type WorkflowDefinition, type WorkflowJournalEntry, type WorkflowTask } from "./types";
 
 export interface WorkflowStoreDirs {
   base: string;
@@ -40,11 +41,12 @@ export function validateDefinition(def: WorkflowDefinition): string[] {
     errors.push("workflow must declare at least one phase");
     return errors;
   }
-  if (def.phases[0].gate) {
+  if (def.phases[0]?.gate) {
     errors.push("the first phase must not be a gate");
   }
   const ids = new Set<string>();
   for (const phase of def.phases) {
+    if (!phase || typeof phase !== "object") { errors.push("phase must be an object"); continue; }
     if (!phase.id || !/^[a-z0-9][a-z0-9._-]*$/i.test(phase.id)) {
       errors.push(`invalid phase id: ${JSON.stringify(phase.id)}`);
       continue;
@@ -54,14 +56,23 @@ export function validateDefinition(def: WorkflowDefinition): string[] {
     if (phase.mode && phase.mode !== "chat" && phase.mode !== "agent") {
       errors.push(`phase ${phase.id}: unknown mode ${phase.mode}`);
     }
+    if (phase.agent && !WORKFLOW_AGENTS.includes(phase.agent)) errors.push(`phase ${phase.id}: unknown agent ${phase.agent}`);
+    if (phase.modelRef !== undefined && typeof phase.modelRef !== "string") errors.push(`phase ${phase.id}: modelRef must be a string`);
+    if (phase.prompt !== undefined && typeof phase.prompt !== "string") errors.push(`phase ${phase.id}: prompt must be a string`);
+    if (phase.inputs && (!Array.isArray(phase.inputs) || phase.inputs.some(input => typeof input !== "string"))) errors.push(`phase ${phase.id}: inputs must be strings`);
     if (phase.gate && phase.modelRef) {
       errors.push(`phase ${phase.id}: a gate phase cannot also bind a model`);
     }
   }
+  if (def.defaults && (typeof def.defaults !== "object" || Array.isArray(def.defaults) || Object.values(def.defaults).some(ref => typeof ref !== "string"))) errors.push("defaults must map roles to model strings");
   for (const phase of def.phases) {
-    const target = phase.gate?.rejectTo;
+    const target = phase?.gate?.rejectTo;
     if (target && !ids.has(target)) {
       errors.push(`phase ${phase.id}: rejectTo references unknown phase ${target}`);
+    }
+    if (target && ids.has(target)) {
+      const index = def.phases.findIndex(p => p?.id === target);
+      if (def.phases[index]?.gate || index >= def.phases.indexOf(phase)) errors.push(`phase ${phase.id}: rejectTo must reference an earlier work phase`);
     }
   }
   return errors;
@@ -96,6 +107,10 @@ export function listDefinitions(baseDir?: string): WorkflowDefinition[] {
 
 export function getDefinition(id: string, baseDir?: string): WorkflowDefinition | null {
   return listDefinitions(baseDir).find(def => def.id === id) ?? null;
+}
+
+export function definitionForTask(task: WorkflowTask, baseDir?: string): WorkflowDefinition | null {
+  return task.definition ?? getDefinition(task.workflowId, baseDir);
 }
 
 /** Remove a USER definition file. Built-ins cannot be deleted (they shadow nothing). */
@@ -148,7 +163,11 @@ export function loadTask(taskId: string, baseDir?: string): WorkflowTask | null 
 export function saveTask(task: WorkflowTask, baseDir?: string): void {
   const dir = taskDir(task.id, baseDir);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "task.json"), JSON.stringify(task, null, 2) + "\n");
+  const staging = join(dir, `.task-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(staging, JSON.stringify(task, null, 2) + "\n", { mode: 0o600 });
+    renameSync(staging, join(dir, "task.json"));
+  } finally { rmSync(staging, { force: true }); }
 }
 
 export function appendJournal(taskId: string, entry: WorkflowJournalEntry, baseDir?: string): void {

@@ -11,7 +11,7 @@
  * - POST /api/workflows/runs/{id}/abort        → { reason? }
  */
 
-import { configuredAdminAuthToken, configuredApiAuthToken, jsonResponse } from "../auth-cors";
+import { configuredApiAuthToken, jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import {
@@ -23,11 +23,11 @@ import {
   rejectGate,
   startRun,
 } from "../../workflow/engine";
-import { deleteDefinition, listDefinitions, listTasks, saveDefinition } from "../../workflow/store";
+import { deleteDefinition, getDefinition, listDefinitions, listTasks, saveDefinition } from "../../workflow/store";
 import { isExecuting as kickIsExecuting, kickExecution } from "../../workflow/executor";
 import { syncWorkflowLayer } from "../../workflow/inject";
 import { ensureWorkflowSkill } from "../../workflow/skill";
-import type { WorkflowDefinition } from "../../workflow/types";
+import type { WorkflowAgent, WorkflowDefinition } from "../../workflow/types";
 
 /** CCG-style one-command classification: keyword match, else feature delivery. */
 export function classifyWorkflow(description: string): string {
@@ -62,16 +62,25 @@ export async function defaultModelRef(config: ManagementContext["config"]): Prom
 }
 
 function executorOptions(ctx: ManagementContext) {
-  // The data plane admits either admission secret; prefer the API one when present.
-  const token = configuredApiAuthToken() ?? configuredAdminAuthToken() ?? "";
+  // Use a data-plane credential only; management credentials cannot admit model calls.
+  const token = configuredApiAuthToken() ?? ctx.config.apiKeys?.find(entry => entry.key.trim())?.key ?? "";
   return {
     baseUrl: `http://127.0.0.1:${ctx.config.port}`,
     adminToken: token,
+    onTransition: () => { syncWorkflowLayer(); },
   };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function agentOverrides(body: Record<string, unknown>): Record<string, WorkflowAgent> | undefined {
+  if (body.agentOverrides === undefined) return undefined;
+  if (!isPlainRecord(body.agentOverrides) || Object.values(body.agentOverrides).some(v => typeof v !== "string")) {
+    throw new WorkflowError("agentOverrides must map roles to agent names");
+  }
+  return body.agentOverrides as Record<string, WorkflowAgent>;
 }
 
 async function readJsonBody(ctx: ManagementContext): Promise<unknown | Response> {
@@ -144,7 +153,16 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
     const fallbackModelRef = typeof body.modelRef === "string" && body.modelRef.trim()
       ? body.modelRef.trim()
       : await defaultModelRef(ctx.config);
-    if (!fallbackModelRef) {
+    const roleOverrides = isPlainRecord(body.roleOverrides)
+      ? Object.fromEntries(Object.entries(body.roleOverrides).filter(([, value]) => typeof value === "string") as Array<[string, string]>)
+      : undefined;
+    const definition = getDefinition(workflowId);
+    const needsFallback = definition?.phases.some(phase => {
+      if (!phase.modelRef?.startsWith("role:")) return false;
+      const role = phase.modelRef.slice(5).trim();
+      return !roleOverrides?.[role]?.trim() && !definition.defaults?.[role]?.trim();
+    });
+    if (!fallbackModelRef && needsFallback) {
       return jsonResponse(
         { error: "no default model configured — pass modelRef or set a provider defaultModel", code: "no_default_model" },
         409,
@@ -156,12 +174,13 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       const task = startRun({
         workflowId,
         title,
+        requirements: description,
+        agentOverrides: agentOverrides(body),
+        baseRevision: typeof body.baseRevision === "string" ? body.baseRevision : undefined,
         workspaceDir: typeof body.workspaceDir === "string" ? body.workspaceDir : undefined,
-        roleOverrides: isPlainRecord(body.roleOverrides)
-          ? Object.fromEntries(Object.entries(body.roleOverrides).filter(([, v]) => typeof v === "string") as Array<[string, string]>)
-          : undefined,
+        roleOverrides,
         autoRun: true,
-        fallbackModelRef,
+        fallbackModelRef: fallbackModelRef ?? undefined,
       });
       ensureWorkflowSkill();
       const execution = kickExecution(task.id, { ...executorOptions(ctx), auto: true });
@@ -192,7 +211,11 @@ export async function handleWorkflowRoutes(ctx: ManagementContext): Promise<Resp
       : undefined;
     try {
       const auto = body.auto === true;
-      const task = startRun({ workflowId, title, workspaceDir, roleOverrides, autoRun: auto });
+      const task = startRun({ workflowId, title, workspaceDir, roleOverrides, autoRun: auto,
+        requirements: typeof body.requirements === "string" ? body.requirements : undefined,
+        baseRevision: typeof body.baseRevision === "string" ? body.baseRevision : undefined,
+        agentOverrides: agentOverrides(body),
+      });
       ensureWorkflowSkill();
       let execution: { started: boolean; reason?: string } = { started: false };
       if (auto) execution = kickExecution(task.id, { ...executorOptions(ctx), auto: true });

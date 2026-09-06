@@ -1,16 +1,15 @@
 /**
  * Workflow state machine — start, advance, gate, abort.
  *
- * The engine owns state transitions only. Phase *execution* (proxied chat calls and
- * headless agent runs) is W2; until then the operator or the orchestrating agent
- * supplies phase outputs when advancing, exactly like CCG's operator-gated phases.
+ * The engine owns transitions; the executor supplies automated phase results,
+ * while interactive agents may advance manual phases.
  *
  * Invariants:
  * - `task.phases[task.phaseIndex]` is the actionable phase.
  * - A gate phase never carries work: arriving at one flips the task to
  *   `awaiting_gate`, and only an explicit approve/reject leaves it.
- * - Every transition appends to `journal.jsonl` before the caller sees the result,
- *   so `task.json` and the journal never disagree about what happened.
+ * - Transitions append a journal entry; the atomically replaced task snapshot
+ *   remains authoritative after interruption.
  */
 
 import {
@@ -20,7 +19,12 @@ import {
   readJournal,
   saveTask,
   validateDefinition,
+  definitionForTask,
 } from "./store";
+import { randomUUID } from "node:crypto";
+import { activeExecution, cancelExecution } from "./execution-state";
+import { collectDiff, validateWorkspace, resolveBaseRevision } from "./workspace";
+import { WORKFLOW_AGENTS, type WorkflowAgent } from "./types";
 import type {
   WorkflowDefinition,
   WorkflowJournalEntry,
@@ -59,9 +63,9 @@ export function resolveModelRef(
   if (!ref.startsWith("role:")) return { modelRef: ref, source: "explicit" };
   const role = ref.slice("role:".length).trim();
   if (!role) return { source: "unresolved" };
-  const override = task.roleOverrides?.[role];
+  const override = task.roleOverrides?.[role]?.trim();
   if (override) return { modelRef: override, source: "task-override" };
-  const fallback = definition.defaults?.[role];
+  const fallback = definition.defaults?.[role]?.trim();
   if (fallback) return { modelRef: fallback, source: "definition-default" };
   return { source: "unresolved" };
 }
@@ -71,6 +75,7 @@ function enterPhase(task: WorkflowTask, definition: WorkflowDefinition, index: n
   const phase = definition.phases[index];
   const state = task.phases[index];
   state.status = "in_progress";
+  state.attemptId = randomUUID();
   state.startedAt = now();
   state.modelRef = resolveModelRef(phase, definition, task).modelRef;
   journal(task.id, { event: "phase_started", phaseId: phase.id, detail: state.modelRef }, baseDir);
@@ -84,6 +89,9 @@ export function startRun(
   input: {
     workflowId: string;
     title: string;
+    requirements?: string;
+    baseRevision?: string;
+    agentOverrides?: Record<string, WorkflowAgent>;
     workspaceDir?: string;
     roleOverrides?: Record<string, string>;
     autoRun?: boolean;
@@ -111,9 +119,26 @@ export function startRun(
       const ref = phase.modelRef?.trim();
       if (ref?.startsWith("role:")) {
         const role = ref.slice(5).trim();
-        if (role && !roleOverrides[role]) roleOverrides[role] = input.fallbackModelRef;
+        if (role && !roleOverrides[role] && !definition.defaults?.[role]?.trim()) roleOverrides[role] = input.fallbackModelRef;
       }
     }
+  }
+
+  for (const agent of Object.values(input.agentOverrides ?? {})) {
+    if (!WORKFLOW_AGENTS.includes(agent)) throw new WorkflowError(`unknown workflow agent: ${agent}`);
+  }
+  let workspaceDir: string | undefined;
+  let baseRevision: string | undefined;
+  try {
+    workspaceDir = input.workspaceDir ? validateWorkspace(input.workspaceDir) : undefined;
+    if (input.baseRevision && !workspaceDir) throw new Error("baseRevision requires workspaceDir");
+    baseRevision = workspaceDir ? resolveBaseRevision(workspaceDir, input.baseRevision) : undefined;
+  } catch (error) { throw new WorkflowError(error instanceof Error ? error.message : String(error)); }
+  if (input.autoRun && !workspaceDir && definition.phases.some(p => p.mode === "agent" || p.inputs?.includes("diff"))) {
+    throw new WorkflowError("automated code workflows require an explicit workspaceDir");
+  }
+  if (input.autoRun && !baseRevision && definition.phases.some(p => p.inputs?.includes("diff"))) {
+    throw new WorkflowError("automated diff review requires a Git workspace with a base commit");
   }
 
   const createdAt = now();
@@ -121,12 +146,16 @@ export function startRun(
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     workflowId: definition.id,
     title,
+    requirements: input.requirements?.trim() || title,
+    definition: structuredClone(definition),
+    agentOverrides: input.agentOverrides,
+    baseRevision,
     status: "running",
     phaseIndex: 0,
     phases: definition.phases.map(phase => ({ id: phase.id, status: "pending" as const })),
     roleOverrides,
     autoRun: input.autoRun,
-    workspaceDir: input.workspaceDir,
+    workspaceDir,
     createdAt,
     updatedAt: createdAt,
   };
@@ -140,10 +169,12 @@ export function startRun(
 
 export function advanceRun(
   taskId: string,
-  input: { outputs?: string } = {},
+  input: { outputs?: string; executionId?: string } = {},
   baseDir?: string,
 ): WorkflowTask {
   const task = requireTask(taskId, baseDir);
+  const execution = activeExecution(taskId, baseDir);
+  if (execution && execution.id !== input.executionId) throw new WorkflowError("phase is executing; wait for it to finish or abort the run", 409);
   if (task.status !== "running") {
     throw new WorkflowError(
       task.status === "awaiting_gate"
@@ -197,6 +228,14 @@ export function approveGate(taskId: string, input: { note?: string } = {}, baseD
   const index = task.phaseIndex;
   const phase = definition.phases[index];
   if (!phase.gate) throw new WorkflowError(`phase '${phase.id}' is not a gate`, 409);
+
+  const evidence = [...task.phases.slice(0, index)].reverse().find(p => p.status === "done" && p.evidence)?.evidence;
+  if (evidence) {
+    const current = collectDiff(task.workspaceDir, evidence.baseRevision);
+    if (current.headRevision !== evidence.headRevision || current.diff !== evidence.diff) {
+      throw new WorkflowError("code changed since review; reject the gate and review the updated code before accepting", 409);
+    }
+  }
 
   const state = task.phases[index];
   state.status = "done";
@@ -261,10 +300,19 @@ export function rejectGate(taskId: string, input: { note?: string } = {}, baseDi
   }
 
   task.currentGate = undefined;
+  task.rework = {
+    targetPhaseId: definition.phases[target].id,
+    note: input.note,
+    phases: structuredClone(task.phases.slice(target, index)),
+  };
+  for (let i = target; i < task.phases.length; i++) {
+    task.phases[i] = { id: definition.phases[i].id, status: i === index ? "rejected" : "pending" };
+  }
   task.status = "running";
   enterPhase(task, definition, target, baseDir);
   task.updatedAt = now();
   saveTask(task, baseDir);
+  cancelExecution(taskId, baseDir);
   return task;
 }
 
@@ -278,6 +326,7 @@ export function abortRun(taskId: string, input: { reason?: string } = {}, baseDi
   task.updatedAt = now();
   journal(task.id, { event: "aborted", detail: input.reason }, baseDir);
   saveTask(task, baseDir);
+  cancelExecution(taskId, baseDir);
   return task;
 }
 
@@ -299,7 +348,7 @@ function requireTask(taskId: string, baseDir?: string): WorkflowTask {
 }
 
 function requireDefinition(task: WorkflowTask, baseDir?: string): WorkflowDefinition {
-  const definition = getDefinition(task.workflowId, baseDir);
+  const definition = definitionForTask(task, baseDir);
   if (!definition) {
     throw new WorkflowError(`workflow '${task.workflowId}' for run ${task.id} no longer exists`, 404);
   }

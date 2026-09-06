@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT, type TFn } from "../i18n/shared";
-import { IconBot, IconCheck, IconCopy, IconFolder, IconPlay, IconRefresh, IconTerminal, IconX } from "../icons";
+import { IconBot, IconCheck, IconCopy, IconFolder, IconRefresh, IconX } from "../icons";
 import { formatTokens } from "../format-tokens";
 import WorkflowEditor from "./WorkflowEditor";
 import "../styles-workflow.css";
@@ -11,6 +11,7 @@ export interface WorkflowPhase {
   gate?: { id: string; rejectTo?: string };
   modelRef?: string;
   mode?: "chat" | "agent";
+  agent?: "codex" | "agy" | "grok" | "opencode" | "claude";
   prompt?: string;
   inputs?: string[];
 }
@@ -36,6 +37,8 @@ interface WorkflowPhaseState {
 }
 
 interface WorkflowTask {
+  definition?: WorkflowDefinition;
+  requirements?: string;
   id: string;
   workflowId: string;
   title: string;
@@ -43,6 +46,7 @@ interface WorkflowTask {
   phaseIndex: number;
   phases: WorkflowPhaseState[];
   workspaceDir?: string;
+  autoRun?: boolean;
   currentGate?: { id: string; reachedAt: number };
   createdAt: number;
   updatedAt: number;
@@ -72,23 +76,22 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [outputsDraft, setOutputsDraft] = useState("");
-  const [showStart, setShowStart] = useState(false);
-  const [startWorkflowId, setStartWorkflowId] = useState("");
-  const [startTitle, setStartTitle] = useState("");
-  const [startRoles, setStartRoles] = useState<Record<string, string>>({});
-  const [startAuto, setStartAuto] = useState(false);
+  const [rejectionNote, setRejectionNote] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const [templateId, setTemplateId] = useState(() => {
+    try { return localStorage.getItem(`ocx-workflow-template:${apiBase}`) || "feature-delivery"; } catch { return "feature-delivery"; }
+  });
+  const [promptCopied, setPromptCopied] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [goDescription, setGoDescription] = useState("");
-  const [goBusy, setGoBusy] = useState(false);
   const [editor, setEditor] = useState<{ draft: WorkflowDefinition; idLocked: boolean; overridesBuiltin: boolean } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorErrors, setEditorErrors] = useState<string[] | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  const refreshLists = useCallback(async () => {
-    setLoading(true);
+  const refreshLists = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [defsRes, runsRes] = await Promise.all([
         fetch(`${apiBase}/api/workflows`),
@@ -103,7 +106,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [apiBase]);
 
@@ -122,7 +125,9 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   }, [apiBase]);
 
   useEffect(() => {
-    void refreshLists();
+    const timer = window.setTimeout(() => { void refreshLists(); }, 0);
+    const poll = window.setInterval(() => { void refreshLists(true); }, 5000);
+    return () => { window.clearTimeout(timer); window.clearInterval(poll); };
   }, [refreshLists]);
 
   // Model catalog for pickers: combos and policy profiles first (virtual ids), then
@@ -180,6 +185,8 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
   }, [selected, openRun]);
 
   const action = async (path: string, body: Record<string, unknown>, done: string) => {
+    if (actionBusy) return;
+    setActionBusy(true);
     setNotice(null);
     try {
       const res = await fetch(`${apiBase}/api/workflows/runs/${path}`, {
@@ -196,33 +203,8 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
       setTimeout(() => setNotice(null), 4000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const startRun = async () => {
-    setNotice(null);
-    try {
-      const res = await fetch(`${apiBase}/api/workflows/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workflowId: startWorkflowId,
-          title: startTitle,
-          roleOverrides: startRoles,
-          auto: startAuto,
-        }),
-      });
-      const body = (await res.json()) as { error?: string; task?: WorkflowTask };
-      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
-      setShowStart(false);
-      setStartTitle("");
-      setStartRoles({});
-      setNotice(startAuto ? t("workflows.startAutoNotice") : t("workflows.startNotice"));
-      await refreshLists();
-      if (body.task) void openRun(body.task.id);
-      setTimeout(() => setNotice(null), 4000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -237,6 +219,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
       });
       const body = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(body.error || `save failed (${res.status})`);
+      chooseTemplate(draft.id);
       setEditor(null);
       setNotice(t("workflows.runSaved", { id: draft.id }));
       await refreshLists();
@@ -262,40 +245,38 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
     }
   };
 
-  const quickGo = async () => {
-    if (!goDescription.trim()) return;
-    setGoBusy(true);
-    setError(null);
+  const workflowTitle = (def: WorkflowDefinition) => {
+    if (def.builtin && def.id === "feature-delivery") return t("workflows.monitor.feature");
+    if (def.builtin && def.id === "review-audit") return t("workflows.monitor.audit");
+    if (def.builtin && def.id === "debug-investigate") return t("workflows.monitor.debug");
+    return def.title || def.id;
+  };
+  const template = definitions.find(def => def.id === templateId) ?? definitions[0];
+  const chooseTemplate = (id: string) => {
+    setTemplateId(id);
+    setPromptCopied(false);
+    try { localStorage.setItem(`ocx-workflow-template:${apiBase}`, id); } catch { /* Selection still works without storage. */ }
+  };
+  const roleTitle = (role: string) => {
+    if (role === "planner") return t("workflows.templates.planner");
+    if (role === "worker") return t("workflows.templates.worker");
+    if (role === "reviewer") return t("workflows.templates.reviewer");
+    return role;
+  };
+  const templateRoles = (def: WorkflowDefinition) => Array.from(new Set(def.phases.flatMap(phase => phase.modelRef?.startsWith("role:") ? [phase.modelRef.slice(5)] : [])));
+  const visibleRuns = runs.filter(run => showHistory || run.status === "running" || run.status === "awaiting_gate");
+  const historyCount = runs.filter(run => run.status === "completed" || run.status === "aborted").length;
+  const selectedDefinition = selected?.definition ?? definitions.find(d => d.id === selected?.workflowId) ?? null;
+
+  const copyPrompt = async (text: string) => {
     try {
-      const res = await fetch(`${apiBase}/api/workflows/go`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: goDescription.trim() }),
-      });
-      const body = (await res.json()) as { error?: string; task?: WorkflowTask };
-      if (!res.ok) throw new Error(body.error || `go failed (${res.status})`);
-      setNotice(t("workflows.go.started"));
-      setGoDescription("");
-      await refreshLists();
-      if (body.task) void openRun(body.task.id);
-      setTimeout(() => setNotice(null), 4000);
+      await navigator.clipboard.writeText(text);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setGoBusy(false);
     }
   };
-
-  const roleSlotsFor = (def: WorkflowDefinition | null): string[] => {
-    if (!def) return [];
-    const roles = new Set<string>();
-    for (const phase of def.phases) {
-      if (phase.modelRef?.startsWith("role:")) roles.add(phase.modelRef.slice(5));
-    }
-    return Array.from(roles);
-  };
-
-  const selectedDefinition = definitions.find(d => d.id === selected?.workflowId) ?? null;
 
   const copyStatus = () => {
     if (!selected) return;
@@ -317,7 +298,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
             {t("workflows.title")}
           </h2>
           <p className="sessions-subtitle">
-            {t("workflows.subtitle")}
+            {t("workflows.monitor.subtitle")}
           </p>
         </div>
         <div className="workflows-header-actions">
@@ -329,80 +310,82 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
           >
             <IconRefresh className={loading ? "spin" : ""} /> {t("workflows.refresh")}
           </button>
-          <button
-            id="workflows-btn-editor"
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => {
-              setEditorErrors(null);
-              setEditor({
-                draft: {
-                  id: "",
-                  title: "",
-                  description: "",
-                  defaults: {},
-                  phases: [{ id: "plan", mode: "chat", prompt: "" }],
-                },
-                idLocked: false,
-                overridesBuiltin: false,
-              });
-            }}
-          >
-            {t("workflows.editor.new")}
-          </button>
-          <button
-            id="workflows-btn-start"
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => {
-              setShowStart(true);
-              setStartWorkflowId(definitions[0]?.id ?? "");
-            }}
-          >
-            <IconPlay /> {t("workflows.newRun")}
-          </button>
+
         </div>
       </div>
 
       {error && <div className="session-error-banner">{error}</div>}
       {notice && <div className="session-error-banner workflows-notice">{notice}</div>}
 
-      <div className="workflows-quickgo">
-        <input
-          type="text"
-          className="workflows-quickgo-input"
-          placeholder={t("workflows.go.placeholder")}
-          value={goDescription}
-          onChange={e => setGoDescription(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !goBusy) void quickGo(); }}
-        />
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => void quickGo()}
-          disabled={goBusy || !goDescription.trim()}
-        >
-          <IconPlay /> {t("workflows.go.button")}
+      <section className="workflows-template-picker">
+        <div className="workflows-list-heading">
+          <h3 className="workflows-column-title">{t("workflows.templates.title")}</h3>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={!template} onClick={() => {
+            if (!template) return;
+            setEditorErrors(null);
+            setEditor({ draft: { ...structuredClone(template), id: "", title: "", builtin: false }, idLocked: false, overridesBuiltin: false });
+          }}>{t("workflows.templates.create")}</button>
+        </div>
+        <p className="workflows-template-hint">{t("workflows.templates.hint")}</p>
+        <div className="workflows-template-options" role="group" aria-label={t("workflows.templates.title")}>
+          {definitions.map(def => <button type="button" key={def.id} className={`workflows-template-option ${template?.id === def.id ? "active" : ""}`} aria-pressed={template?.id === def.id} onClick={() => chooseTemplate(def.id)}>
+            <strong>{workflowTitle(def)}</strong>
+            <code>{def.id}</code>
+            <span>{def.builtin ? t("workflows.builtin") : t("workflows.templates.personal")}</span>
+          </button>)}
+        </div>
+        {template && <div className="workflows-template-config">
+          <div className="workflows-template-roles">
+            {templateRoles(template).map(role => {
+              const phases = template.phases.filter(phase => phase.modelRef === `role:${role}`);
+              const tools = Array.from(new Set(phases.map(phase => phase.mode === "agent" ? phase.agent ?? "codex" : t("workflows.templates.api"))));
+              return <div className="workflows-template-role" key={role}>
+                <strong>{roleTitle(role)}</strong>
+                <span>{role === "planner" || role === "reviewer" ? t("workflows.templates.conversation") : tools.join(" / ")}</span>
+                {role !== "planner" && role !== "reviewer" && <code>{template.defaults?.[role] || t("workflows.templates.unset")}</code>}
+              </div>;
+            })}
+          </div>
+          <p className="workflows-template-hint">{t("workflows.templates.conversationHint")}</p>
+          <div className="workflows-def-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => {
+              setEditorErrors(null);
+              setEditor({ draft: structuredClone(template), idLocked: true, overridesBuiltin: template.builtin === true });
+            }}>{t("workflows.templates.configure")}</button>
+            {!template.builtin && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void deleteDefinition(template.id)}>{t("common.delete")}</button>}
+          </div>
+        </div>}
+      </section>
+
+      {template && <div className="workflows-chat-entry">
+        <div>
+          <strong>{t("workflows.monitor.title")}</strong>
+          <blockquote>{t("workflows.templates.prompt", { id: template.id })}</blockquote>
+        </div>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => void copyPrompt(t("workflows.templates.prompt", { id: template.id }))}>
+          <IconCopy /> {promptCopied ? t("workflows.copied") : t("workflows.monitor.copy")}
         </button>
-      </div>
-      <p className="workflows-quickgo-hint">{t("workflows.go.hint")}</p>
+      </div>}
 
       <div className="workflows-layout">
         <div className="workflows-runs-column">
-          <h3 className="workflows-column-title">{t("workflows.runs")}</h3>
-          {runs.length === 0 ? (
+          <div className="workflows-list-heading">
+            <h3 className="workflows-column-title">{t("workflows.runs")}</h3>
+            {historyCount > 0 && <label className="workflows-history-toggle"><input type="checkbox" checked={showHistory} onChange={e => setShowHistory(e.target.checked)} />{t("workflows.monitor.history", { count: historyCount })}</label>}
+          </div>
+          {visibleRuns.length === 0 ? (
             <div className="session-empty-state">
               <IconFolder className="session-empty-icon" />
-              <p>{t("workflows.empty")}</p>
+              <p>{t("workflows.monitor.empty")}</p>
             </div>
           ) : (
             <div className="workflows-run-list">
-              {runs.map(run => (
+              {visibleRuns.map(run => (
                 <button
                   key={run.id}
                   type="button"
                   className={`workflows-run-row ${selected?.id === run.id ? "active" : ""}`}
-                  onClick={() => void openRun(run.id)}
+                  onClick={() => { setRejectionNote(""); void openRun(run.id); }}
                 >
                   <span className={`workflows-run-status st-${run.status}`}>
                     {run.status === "awaiting_gate" ? "⏸" : run.status === "running" ? "▶" : run.status === "completed" ? "✓" : "✗"}
@@ -410,7 +393,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                   <span className="workflows-run-main">
                     <span className="workflows-run-title">{run.title}</span>
                     <span className="workflows-run-meta">
-                      {run.workflowId} · {t("workflows.phaseProgress", { index: run.phaseIndex + 1, total: run.phases.length })} · {statusPill(run, t)}
+                      {workflowTitle(run.definition ?? definitions.find(d => d.id === run.workflowId) ?? { id: run.workflowId, phases: [] })} · {t("workflows.phaseProgress", { index: run.phaseIndex + 1, total: run.phases.length })} · {statusPill(run, t)}
                     </span>
                   </span>
                 </button>
@@ -419,61 +402,7 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
           )}
         </div>
 
-        <div className="workflows-detail-column">
-          <h3 className="workflows-column-title">{t("workflows.definitions")}</h3>
-          <div className="workflows-def-list">
-            {definitions.map(def => (
-              <div key={def.id} className="workflows-def-card">
-                <div className="workflows-def-head">
-                  <strong>{def.id}</strong>
-                  {def.builtin && <span className="workflows-def-badge">{t("workflows.builtin")}</span>}
-                  <span className="workflows-def-actions">
-                    {def.builtin ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          setEditorErrors(null);
-                          setEditor({ draft: structuredClone(def), idLocked: true, overridesBuiltin: true });
-                        }}
-                      >
-                        Customize
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => {
-                            setEditorErrors(null);
-                            setEditor({ draft: structuredClone(def), idLocked: true, overridesBuiltin: false });
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm workflows-abort"
-                          onClick={() => void deleteDefinition(def.id)}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
-                  </span>
-                </div>
-                <p className="workflows-def-desc">{def.title || def.description}</p>
-                <div className="workflows-def-phases">
-                  {def.phases.map(p => (
-                    <span key={p.id} className={`workflows-def-phase ${p.gate ? "is-gate" : ""}`}>
-                      {p.gate ? `⏸ ${p.gate.id}` : `${p.mode ?? "chat"}: ${p.id}`}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+
       </div>
 
       {selected && (
@@ -527,34 +456,12 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
 
               {selected.status === "running" && (
                 <div className="workflows-advance-box">
-                  <textarea
-                    className="workflows-outputs-input"
-                    rows={2}
-                    placeholder="Outputs to record for the current phase (optional)…"
-                    value={outputsDraft}
-                    onChange={e => setOutputsDraft(e.target.value)}
-                  />
+                  <p>{t(executing || selected.autoRun ? "workflows.monitor.executing" : "workflows.monitor.resumeHint")}</p>
                   <div className="workflows-advance-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => void action(`${selected.id}/execute`, { auto: false }, executing ? t("workflows.notice.alreadyExecuting") : t("workflows.notice.executeStarted"))}
-                      disabled={executing}
-                    >
-                      <IconPlay /> {t("workflows.executePhase")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => { void action(`${selected.id}/advance`, { outputs: outputsDraft }, t("workflows.notice.advanced")); setOutputsDraft(""); }}
-                    >
-                      <IconTerminal /> {t("workflows.advance")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm workflows-abort"
-                      onClick={() => void action(`${selected.id}/abort`, { reason: "aborted from dashboard" }, t("workflows.notice.aborted"))}
-                    >
+                    {!executing && !selected.autoRun && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void copyPrompt(t("workflows.monitor.resume", { id: selected.id }))}>
+                      <IconCopy /> {promptCopied ? t("workflows.copied") : t("workflows.monitor.copy")}
+                    </button>}
+                    <button type="button" className="btn btn-ghost btn-sm workflows-abort" disabled={actionBusy} onClick={() => void action(`${selected.id}/abort`, { reason: "aborted from dashboard" }, t("workflows.notice.aborted"))}>
                       <IconX /> {t("workflows.abort")}
                     </button>
                   </div>
@@ -564,18 +471,24 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
               {selected.status === "awaiting_gate" && (
                 <div className="workflows-gate-box">
                   <strong>{t("workflows.gateWaiting", { gate: selected.currentGate?.id ?? "?" })}</strong>
+                  <label className="workflows-field">
+                    {t("workflows.rejectionNote")}
+                    <textarea value={rejectionNote} onChange={e => setRejectionNote(e.target.value)} />
+                  </label>
                   <div className="workflows-advance-actions">
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
-                      onClick={() => void action(`${selected.id}/gate`, { action: "approve", note: "approved from dashboard" }, t("workflows.notice.gateApproved"))}
+                      disabled={actionBusy}
+                      onClick={() => void action(`${selected.id}/gate`, { action: "approve", note: undefined }, t("workflows.notice.gateApproved"))}
                     >
                       <IconCheck /> {t("workflows.gateApprove")}
                     </button>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      onClick={() => void action(`${selected.id}/gate`, { action: "reject", note: "rejected from dashboard" }, t("workflows.notice.gateRejected"))}
+                      disabled={actionBusy}
+                      onClick={() => void action(`${selected.id}/gate`, { action: "reject", note: rejectionNote.trim() || undefined }, t("workflows.notice.gateRejected"))}
                     >
                       <IconX /> {t("workflows.gateReject")}
                     </button>
@@ -603,72 +516,6 @@ export default function Workflows({ apiBase = "" }: { apiBase?: string }) {
                 onClick={() => { setSelected(null); setJournal([]); }}
               >
                 <IconRefresh /> {t("workflows.close")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showStart && (
-        <div className="modal-backdrop" onClick={() => setShowStart(false)}>
-          <div className="modal-container workflows-start-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-row"><h3 className="modal-title">{t("workflows.start.title")}</h3></div>
-              <button type="button" className="btn-icon-close" onClick={() => setShowStart(false)}>
-                <IconX />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label className="workflows-field">
-                {t("workflows.start.workflow")}
-                <select
-                  value={startWorkflowId}
-                  onChange={e => {
-                    setStartWorkflowId(e.target.value);
-                    setStartRoles({});
-                  }}
-                >
-                  {definitions.map(d => (
-                    <option key={d.id} value={d.id}>{d.id} — {d.title || d.description || ""}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="workflows-field">
-                {t("workflows.start.titleField")}
-                <input
-                  type="text"
-                  value={startTitle}
-                  placeholder="e.g. Add JWT authentication"
-                  onChange={e => setStartTitle(e.target.value)}
-                />
-              </label>
-              {roleSlotsFor(definitions.find(d => d.id === startWorkflowId) ?? null).map(role => (
-                <label key={role} className="workflows-field">
-                  {t("workflows.start.roleModel", { role })}
-                  <input
-                    type="text"
-                    className="mono"
-                    list="ocx-model-refs"
-                    placeholder="provider/model, combo/id or policy/id"
-                    value={startRoles[role] ?? ""}
-                    onChange={e => setStartRoles(prev => ({ ...prev, [role]: e.target.value }))}
-                  />
-                </label>
-              ))}
-              <label className="workflows-field workflows-field-inline">
-                <input type="checkbox" checked={startAuto} onChange={e => setStartAuto(e.target.checked)} />
-                {t("workflows.start.auto")}
-              </label>
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowStart(false)}>{t("workflows.editor.cancel")}</button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={() => void startRun()}
-                disabled={!startWorkflowId || !startTitle.trim()}
-              >
-                <IconPlay /> {t("workflows.start.submit")}
               </button>
             </div>
           </div>

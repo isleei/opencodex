@@ -12,6 +12,32 @@ export interface ProviderQuotaWindow {
   label: string;
   percent: number;
   resetAt?: number;
+  /**
+   * Sampled upstream model id that produced this window. A family window is a
+   * single-model sample kept for routing compatibility, never a measured
+   * family aggregate.
+   */
+  modelId?: string;
+}
+
+/** One parsed upstream model quota reading, with identity. Display-only:
+ * routing/headroom consumers read only the canonical family windows. */
+export interface AgyModelQuota {
+  modelId: string;
+  displayName?: string;
+  family: "Gem" | "Cla" | "OSS" | "other";
+  /** Upstream tier/window identity when the payload reports one model across
+   * multiple quotaInfo entries (e.g. quotaInfoByTier). Preserved so rows stay
+   * distinguishable; never inferred when absent. */
+  tier?: string;
+  percent: number;
+  resetAt?: number;
+}
+
+/** Subscription limits from retrieveUserQuotaSummary, shared within each group. */
+export interface AgyQuotaGroup {
+  id: "gemini" | "claude-gpt";
+  windows: { window: "weekly" | "5h"; percent: number; resetAt?: number }[];
 }
 
 export interface ProviderQuotaCreditsUsd {
@@ -32,5 +58,8 @@ export interface ProviderQuota {
   monthlyResetAt?: number;
   customWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
+  /** Legacy catalog cache only; does not establish subscription allowance. */
+  agyModels?: AgyModelQuota[];
+  agyQuotaGroups?: AgyQuotaGroup[];
   updatedAt: number;
 }

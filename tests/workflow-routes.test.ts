@@ -6,6 +6,8 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { classifyWorkflow } from "../src/server/management/workflow-routes";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import type { OcxConfig } from "../src/types";
+import { saveDefinition } from "../src/workflow/store";
+import { waitForExecution } from "../src/workflow/executor";
 
 describe("Management Workflow REST API (/api/workflows*)", () => {
   let tempBase: string;
@@ -165,13 +167,23 @@ describe("Management Workflow REST API (/api/workflows*)", () => {
     expect(classifyWorkflow("审查一下这个 diff")).toBe("review-audit");
     expect(classifyWorkflow("add rate limiting to the API")).toBe("feature-delivery");
 
+    // Use a no-network fixture: the API test covers persistence and dispatch receipt,
+    // while the executor tests exercise the provider and native CLI contracts.
+    saveDefinition({ id: "go-fixture", phases: [{ id: "manual" }, { id: "plan", modelRef: "role:planner" }, { id: "work", modelRef: "role:worker" }] });
+    const description = "add rate limiting to the API " + "context ".repeat(30) + "LAST_REQUIREMENT";
     const { status, body } = await dispatchRequest("POST", "/api/workflows/go", {
-      description: "add rate limiting to the API",
+      description,
+      workflowId: "go-fixture",
       modelRef: "xai/grok-4.5",
+      workspaceDir: tempBase,
+      agentOverrides: { worker: "agy" },
     });
     expect(status).toBe(200);
     expect(body.task.status).toBe("running");
     expect(body.fallbackModelRef).toBe("xai/grok-4.5");
+    expect(body.task.requirements).toBe(description);
+    expect(body.task.agentOverrides.worker).toBe("agy");
+    await waitForExecution(body.task.id);
     // every role: reference in feature-delivery is pinned to the fallback
     const refs = new Set(Object.values(body.task.roleOverrides ?? {}));
     expect(refs).toEqual(new Set(["xai/grok-4.5"]));
@@ -183,6 +195,17 @@ describe("Management Workflow REST API (/api/workflows*)", () => {
     });
     expect(status).toBe(409);
     expect(body.code).toBe("no_default_model");
+  });
+
+  test("go accepts fully configured role defaults without a global fallback model", async () => {
+    saveDefinition({ id: "configured-go", defaults: { worker: "native/worker" }, phases: [{ id: "manual" }, { id: "work", modelRef: "role:worker" }] });
+    const { status, body } = await dispatchRequest("POST", "/api/workflows/go", {
+      description: "Task", workflowId: "configured-go",
+    });
+    expect(status).toBe(200);
+    expect(body.fallbackModelRef).toBeNull();
+    expect(body.task.roleOverrides).toEqual({});
+    await waitForExecution(body.task.id);
   });
 
   test("unknown runs return 404 and abort terminates a run", async () => {

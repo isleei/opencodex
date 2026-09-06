@@ -36,7 +36,7 @@ function breadcrumbFor(task: WorkflowTask): string | null {
     lines.push(`gate: ${task.currentGate?.id ?? "?"} — wait for the operator to approve or reject`);
   } else {
     lines.push(
-      `next: do the phase work${task.workspaceDir ? ` in ${task.workspaceDir}` : ""}, then run \`ocx workflow advance ${task.id}\` (record a short summary with --outputs)`,
+      `next: read \`ocx workflow status ${task.id} --json\` and follow ocx-workflow; wait while execution is active. Orchestration: ${task.autoRun ? "automatic pipeline" : "current conversation"}.${task.workspaceDir ? ` Workspace: ${task.workspaceDir}` : ""}`,
     );
   }
   lines.push("ignore this block if your current conversation is unrelated to this run.");

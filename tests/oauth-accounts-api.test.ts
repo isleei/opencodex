@@ -12,6 +12,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import { getAccountSet } from "../src/oauth/store";
+import { setAgyKeyringEntryFactoryForTests } from "../src/clients/agy-account-sync";
 import { ACCOUNT_IMPORT_DEADLINE_MS, ACCOUNT_IMPORT_MAX_BYTES, ACCOUNT_IMPORT_MAX_REQUEST_BYTES } from "../src/oauth/account-import/types";
 import { handleOauthAccountRoutes } from "../src/server/management/oauth-account-routes";
 
@@ -53,9 +54,24 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
   writeAccounts();
+  // In-memory keychain for the in-process server: AGY switches exercise the
+  // real payload build/parse/verify without touching the real OS keychain.
+  let keyringValue: string | null = null;
+  setAgyKeyringEntryFactoryForTests(() => ({
+    getPassword: () => keyringValue,
+    setPassword: (pw: string) => {
+      keyringValue = pw;
+    },
+    deletePassword: () => {
+      const had = keyringValue !== null;
+      keyringValue = null;
+      return had;
+    },
+  }));
 });
 
 afterEach(() => {
+  setAgyKeyringEntryFactoryForTests(null);
   globalThis.fetch = originalFetch;
   clearModelCache("google-antigravity");
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -597,6 +613,233 @@ describe("multiauth accounts API", () => {
       expect(after.activeAccountId).toBe("bbbb2222");
     } finally {
       await server.stop(true);
+    }
+  });
+});
+
+describe("AGY switch reports honest per-target sync states", () => {
+  const ACCESS_B = "access-fictitious-oauth-b-001";
+  const REFRESH_B = "refresh-fictitious-oauth-b-001";
+
+  function writeAgyAccounts(): void {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "antigravity-a",
+        accounts: [
+          {
+            id: "antigravity-a",
+            credential: {
+              access: "access-fictitious-oauth-a-001",
+              refresh: "refresh-fictitious-oauth-a-001",
+              expires: 9999999999999,
+              email: "agy-a@example.com",
+              projectId: "project-a",
+            },
+          },
+          {
+            id: "antigravity-b",
+            credential: {
+              access: ACCESS_B,
+              refresh: REFRESH_B,
+              expires: 9999999999999,
+              email: "agy-b@example.com",
+              projectId: "project-b",
+            },
+          },
+        ],
+      },
+    }), { mode: 0o600 });
+  }
+
+  function isolateAgySyncEnv(agyHome: string): Record<string, string | undefined> {
+    const saved = {
+      ANTIGRAVITY_HOME: process.env.ANTIGRAVITY_HOME,
+      GEMINI_HOME: process.env.GEMINI_HOME,
+      AGY_IDE_APP_PATH: process.env.AGY_IDE_APP_PATH,
+      AGY_IDE_DATA_DIR: process.env.AGY_IDE_DATA_DIR,
+    };
+    process.env.ANTIGRAVITY_HOME = agyHome;
+    delete process.env.GEMINI_HOME;
+    // Point the IDE probe at nowhere so tests never touch the real IDE.
+    process.env.AGY_IDE_APP_PATH = join(agyHome, "NoSuch.app");
+    process.env.AGY_IDE_DATA_DIR = join(agyHome, "NoSuchIDE");
+    return saved;
+  }
+
+  function restoreAgySyncEnv(saved: Record<string, string | undefined>): void {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  test("PUT switches, syncs CLI files, and reports CLI+IDE states without secrets", async () => {
+    writeAgyAccounts();
+    const agyHome = mkdtempSync(join(tmpdir(), "ocx-agy-api-ok-"));
+    const saved = isolateAgySyncEnv(agyHome);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        ok: boolean; provider: string; activeAccountId: string; code: string; message: string;
+        cli: { status: string; code: string; retryable: boolean };
+        ide: { status: string; code: string; retryable: boolean };
+      };
+      expect(body.provider).toBe("google-antigravity");
+      expect(body.activeAccountId).toBe("antigravity-b");
+      expect(body.cli.status).toBe("synced");
+      expect(body.cli.retryable).toBe(false);
+      expect(body.ide.status).toBe("not_installed");
+      expect(body.ok).toBe(true);
+      expect(body.code).toBe("AGY_SWITCH_CLI_ONLY_NO_IDE");
+      const raw = JSON.stringify(body);
+      expect(raw.includes(ACCESS_B)).toBe(false);
+      expect(raw.includes(REFRESH_B)).toBe(false);
+
+      const { readFileSync: read } = await import("node:fs");
+      const accounts = JSON.parse(read(join(agyHome, "google_accounts.json"), "utf8"));
+      expect(accounts.active).toBe("agy-b@example.com");
+
+      const list = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity", server.url))
+        .then(r => r.json()) as {
+          activeAccountId: string;
+          agySync: {
+            cli: { filePresent: boolean; matchesActive: boolean | null; keyringPresent: boolean; keyringMatchesActive: boolean | null };
+            ide: { installed: boolean };
+            nativeKeyring: string;
+          };
+        };
+      expect(list.activeAccountId).toBe("antigravity-b");
+      expect(list.agySync.cli.filePresent).toBe(true);
+      expect(list.agySync.cli.matchesActive).toBe(true);
+      expect(list.agySync.cli.keyringPresent).toBe(true);
+      expect(list.agySync.cli.keyringMatchesActive).toBe(true);
+      expect(list.agySync.nativeKeyring).toBe("synced");
+      expect(list.agySync.ide.installed).toBe(false);
+    } finally {
+      await server.stop(true);
+      restoreAgySyncEnv(saved);
+      removeTreeWithRetry(agyHome);
+    }
+  });
+
+  test("repeating the active account retries a diverged CLI file", async () => {
+    writeAgyAccounts();
+    const agyHome = mkdtempSync(join(tmpdir(), "ocx-agy-api-retry-"));
+    const saved = isolateAgySyncEnv(agyHome);
+    const server = startServer(0);
+    try {
+      const { readFileSync: read, writeFileSync: write } = await import("node:fs");
+      const switchOnce = () => fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b" }),
+      });
+      expect((await switchOnce()).status).toBe(200);
+      // Diverge the file behind the proxy's back, then re-request the same account.
+      write(join(agyHome, "google_accounts.json"), JSON.stringify({ active: "stale@example.com", old: [] }));
+      const before = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity", server.url))
+        .then(r => r.json()) as { agySync: { cli: { matchesActive: boolean | null } } };
+      expect(before.agySync.cli.matchesActive).toBe(false);
+      const retry = await switchOnce();
+      expect(retry.status).toBe(200);
+      const retryBody = await retry.json() as { ok: boolean; cli: { status: string } };
+      expect(retryBody.ok).toBe(true);
+      expect(retryBody.cli.status).toBe("synced");
+      const accounts = JSON.parse(read(join(agyHome, "google_accounts.json"), "utf8"));
+      expect(accounts.active).toBe("agy-b@example.com");
+    } finally {
+      await server.stop(true);
+      restoreAgySyncEnv(saved);
+      removeTreeWithRetry(agyHome);
+    }
+  });
+
+  test("CLI write failure keeps the proxy switch but reports ok:false with retry", async () => {
+    writeAgyAccounts();
+    const scratch = mkdtempSync(join(tmpdir(), "ocx-agy-api-fail-"));
+    const blocker = join(scratch, "blocker");
+    const { writeFileSync: write } = await import("node:fs");
+    write(blocker, "not a directory");
+    const saved = isolateAgySyncEnv(blocker);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        ok: boolean; activeAccountId: string; code: string;
+        cli: { status: string; code: string; retryable: boolean };
+      };
+      // The proxy account really did switch; only the local sync failed.
+      expect(body.activeAccountId).toBe("antigravity-b");
+      expect(body.ok).toBe(false);
+      expect(body.cli.status).toBe("failed");
+      expect(body.cli.retryable).toBe(true);
+      expect(body.code).toBe("AGY_SWITCH_CLI_FAILED");
+    } finally {
+      await server.stop(true);
+      restoreAgySyncEnv(saved);
+      removeTreeWithRetry(scratch);
+    }
+  });
+
+  test("invalid targets and unknown accounts are rejected", async () => {
+    writeAgyAccounts();
+    const agyHome = mkdtempSync(join(tmpdir(), "ocx-agy-api-bad-"));
+    const saved = isolateAgySyncEnv(agyHome);
+    const server = startServer(0);
+    try {
+      const badTargets = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b", targets: ["cli", "nope"] }),
+      });
+      expect(badTargets.status).toBe(400);
+      const emptyTargets = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b", targets: [] }),
+      });
+      expect(emptyTargets.status).toBe(400);
+      const unknown = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "does-not-exist" }),
+      });
+      expect(unknown.status).toBe(404);
+      // Rejected switches leave the proxy account alone.
+      const list = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity", server.url))
+        .then(r => r.json()) as { activeAccountId: string };
+      expect(list.activeAccountId).toBe("antigravity-a");
+    } finally {
+      await server.stop(true);
+      restoreAgySyncEnv(saved);
+      removeTreeWithRetry(agyHome);
+    }
+  });
+
+  test("CLI-only target request omits the IDE result", async () => {
+    writeAgyAccounts();
+    const agyHome = mkdtempSync(join(tmpdir(), "ocx-agy-api-clionly-"));
+    const saved = isolateAgySyncEnv(agyHome);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b", targets: ["cli"] }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { ok: boolean; cli: { status: string }; ide?: unknown };
+      expect(body.ok).toBe(true);
+      expect(body.cli.status).toBe("synced");
+      expect("ide" in body).toBe(false);
+    } finally {
+      await server.stop(true);
+      restoreAgySyncEnv(saved);
+      removeTreeWithRetry(agyHome);
     }
   });
 });

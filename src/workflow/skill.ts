@@ -16,39 +16,84 @@ import { join } from "node:path";
 const SKILL_NAME = "ocx-workflow";
 const MANAGED_MARKER = "<!-- managed-by: opencodex (ocx workflow ensure) -->";
 
-const SKILL_BODY = `${MANAGED_MARKER}
----
+const SKILL_BODY = `---
 name: ocx-workflow
-description: Drive OpenCodex workflow runs — execute the current phase of a running workflow when the <ocx-workflow> breadcrumb is present, record outputs, and respect approval gates. Use when a run breadcrumb appears or the operator asks about workflow phases.
+description: Start or resume OpenCodex workflows from a project conversation. Use when the user asks Codex to plan, delegate implementation to an agent CLI, and review, or when an ocx-workflow run is named or its breadcrumb is present.
 ---
+${MANAGED_MARKER}
 
 # OpenCodex Workflow Protocol
 
-When a conversation involves an OpenCodex workflow run (a \`<ocx-workflow>\` breadcrumb
-is present, or the operator names a run):
+## Start from a conversation
 
-1. Inspect the run state:
+For a request to plan here, delegate implementation, then review here:
+
+1. Use the current project directory. Inspect \`ocx workflow --help\` and
+   \`ocx workflow list --json\` for the installed interface and template defaults.
+   Resolve the user's template by exact id or an unambiguous saved title; when
+   no template was named, offer the available templates or use feature-delivery
+   for a feature request. Preserve its phases, per-phase tools, defaults and gates.
+   If the user asks to reuse a personal preset, save its definition once through
+   the supported workflow definition interface; subsequent runs reference its id.
+   Confirm the template's worker CLIs are available and resolve models from saved
+   defaults. Apply tool/model overrides only when the user explicitly changes them.
+   Ask only for missing information; keep native
+   CLI model identifiers distinct from OpenCodex proxy model identifiers.
+2. Create a manually orchestrated run:
 
    \`\`\`bash
-   ocx workflow status <task-id>
+   ocx workflow run <selected-template-id> --title "<full requirements and acceptance criteria>" --workspace "<current project absolute path>" --json
    \`\`\`
 
-2. The current phase tells you what to do (its prompt is in the run's definition —
-   \`ocx workflow show <workflow-id>\`). Do exactly that work. Stay inside the phase
-   scope; do not start the next phase.
-3. When the phase work is done, record it and move on:
+   Omit \`--auto\`: this conversation owns planning and review. \`go\` starts the
+   automated pipeline, including a separate planning process and API review;
+   use it only when that is the requested delivery mode. The directory must be
+   accessible to the proxy process. If it is on another machine, resolve that
+   mismatch before starting. Record the returned run id and inspect its saved
+   definition, requirements, workspace and Git base with \`status --json\`.
+3. Follow the saved phase order; the steps below describe a feature-delivery run.
+   Custom templates may start with investigation or review: perform planner/reviewer
+   roles in this conversation and execute other model-bound phases individually.
+   Plan in this conversation using the actual project. Save the complete plan
+   with \`ocx workflow advance <task-id> --outputs "<plan and acceptance criteria>"\`.
+   Show the plan and wait at the approval gate.
+4. After the operator approves, inspect the state again. For each worker phase,
+   invoke \`ocx workflow execute <task-id>\` without \`--auto\`. It runs one phase,
+   records outputs and advances. Inspect status until it finishes or reports an
+   error, then handle the next phase. The engine supplies the saved plan and any
+   rework instructions to the worker; preserve them when diagnosing failures.
+5. At review, inspect the saved Git base and the actual workspace changes
+   (committed, staged, unstaged and unignored new files). Check requirements,
+   the plan and verification evidence yourself. Record the review with \`advance\`,
+   then wait for acceptance. After acceptance, record the delivery summary.
+   For a rejected plan or implementation, read the saved rework note and previous
+   results, then repeat from the current phase.
 
-   \`\`\`bash
-   ocx workflow advance <task-id> --outputs "<one-paragraph summary of what you did>"
-   \`\`\`
+The dashboard shows progress, outputs and approval controls. A dashboard decision
+updates the run but cannot wake this conversation. On a later "continue", fetch
+its current state before resuming. Reuse the recorded run id rather than creating
+another run for the same task.
 
-4. If the run is \`awaiting_gate\`, STOP. The operator approves or rejects through the
-   CLI or the dashboard. Never approve your own gate.
-5. If a phase has an \`error\` recorded, explain the failure and retry only after
-   fixing the cause.
+## Resume a run
 
-Phases bound to a model reference may be executed automatically by the engine
-(\`ocx workflow execute\`); your job is the phases that need an interactive agent.
+A breadcrumb is a pointer, not authorization to work on an unrelated task. For a
+named or relevant run, read \`ocx workflow status <task-id> --json\`; the saved
+snapshot is authoritative even if the reusable template has changed.
+
+- While execution is active, wait for its result; the engine owns advancement.
+- For an automatic run, \`ocx workflow execute <task-id> --auto\` resumes its pipeline
+  after an execution error has been diagnosed and fixed.
+- For a conversation-orchestrated run, perform planner/reviewer phases here and
+  execute worker phases individually as above. For custom templates, follow their
+  saved phase definitions and the user's specified division of responsibilities.
+- At \`awaiting_gate\`, present the result and wait. An explicit operator decision
+  in this conversation can be recorded with \`ocx workflow gate <task-id> approve\`
+  or \`reject --note "<requested changes>"\`. Never supply your own approval.
+- Stop at completed or aborted runs. Explain recorded errors before retrying.
+
+A delegated worker returns its phase results to the engine. It does not operate
+workflow transitions or approve gates.
+
 `;
 
 function skillBody(): string {

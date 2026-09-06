@@ -103,6 +103,62 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown> | nul
 }
 
 /**
+ * Pick only the token-free sync-report fields for API responses. Sync
+ * results never carry token material by construction; this allowlist keeps
+ * that guarantee even if a result shape grows later.
+ */
+function sanitizeAgyTargetResult(result: Record<string, unknown>): Record<string, unknown> {
+  const pick = (key: string): unknown => result[key];
+  const out: Record<string, unknown> = {
+    target: pick("target"),
+    status: pick("status"),
+    code: pick("code"),
+    message: pick("message"),
+    retryable: pick("retryable"),
+  };
+  if (typeof result.email === "string") out.email = result.email;
+  if (typeof result.nativeKeyring === "string") out.nativeKeyring = result.nativeKeyring;
+  if (typeof result.nativeKeyringDetail === "string") out.nativeKeyringDetail = result.nativeKeyringDetail;
+  return out;
+}
+
+/**
+ * Desensitized AGY sync snapshot for GET account lists: booleans and status
+ * codes only, no emails, no tokens. Lets the dashboard render the true
+ * CLI/IDE state after a refresh instead of deriving "synced" from the proxy
+ * active account.
+ */
+async function agySyncSnapshot(activeAccountId: string | null): Promise<Record<string, unknown>> {
+  try {
+    const { getAccountCredential } = await import("../../oauth/store");
+    const { readAgyCliFileSnapshot, readAgyKeyringSnapshotAsync } = await import("../../clients/agy-account-sync");
+    const { probeAntigravityIde, readAgyIdeSnapshot } = await import("../../clients/antigravity-ide-account-sync");
+    const expectedEmail = activeAccountId ? getAccountCredential("google-antigravity", activeAccountId)?.email : undefined;
+    const cliFile = readAgyCliFileSnapshot(expectedEmail ?? undefined);
+    const keyring = await readAgyKeyringSnapshotAsync(activeAccountId);
+    const ide = probeAntigravityIde();
+    const ideCred = readAgyIdeSnapshot(activeAccountId);
+    return {
+      cli: {
+        filePresent: cliFile.present,
+        matchesActive: cliFile.matchesActive,
+        keyringPresent: keyring.present,
+        keyringMatchesActive: keyring.matchesActive,
+      },
+      ide: {
+        installed: ide.installed,
+        ...(ide.running === undefined ? {} : { running: ide.running }),
+        credentialPresent: ideCred.present,
+        credentialMatchesActive: ideCred.matchesActive,
+      },
+      nativeKeyring:
+        keyring.matchesActive === true ? "synced" : keyring.present ? "mismatch" : "unsupported",
+    };
+  } catch {
+    return { cli: { filePresent: false, matchesActive: null }, ide: { installed: false }, nativeKeyring: "unsupported", unknown: true };
+  }
+}
+/**
  * The single place key-name rules live. The config read schema is deliberately
  * permissive so an existing config can never become unloadable; this is the write
  * boundary that keeps new junk out. A non-string name used to reach `.trim()` and
@@ -288,7 +344,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && hasPassiveAccountQuota(provider);
-    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
+    if (!wantQuota && !passiveQuota) {
+      const projected = projectAccounts();
+      if (provider === "google-antigravity") {
+        return jsonResponse({ ...projected, agySync: await agySyncSnapshot(projected.activeAccountId ?? null) });
+      }
+      return jsonResponse(projected);
+    }
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
@@ -297,7 +359,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       : await fetchProviderAccountQuotas(provider, forceRefresh);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
-    return jsonResponse({
+    const withQuota = {
       activeAccountId: projected.activeAccountId,
       accounts: projected.accounts.map(account => {
         const row = byId.get(account.id);
@@ -309,24 +371,74 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           ...(row.unavailable ? { quotaUnavailable: true } : {}),
         };
       }),
-    });
+    };
+    if (provider === "google-antigravity") {
+      return jsonResponse({ ...withQuota, agySync: await agySyncSnapshot(projected.activeAccountId ?? null) });
+    }
+    return jsonResponse(withQuota);
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string; targets?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../../oauth/store");
+    // Validate AGY sync targets BEFORE mutating: a malformed targets list
+    // must not switch the proxy account as a side effect.
+    let agyTargets: Array<"cli" | "ide"> = ["cli", "ide"];
+    if (provider === "google-antigravity" && body.targets !== undefined) {
+      if (!Array.isArray(body.targets) || body.targets.length === 0) {
+        return jsonResponse({ error: "targets must be a non-empty array of cli/ide" }, 400);
+      }
+      const parsed: Array<"cli" | "ide"> = [];
+      for (const entry of body.targets) {
+        if (entry !== "cli" && entry !== "ide") {
+          return jsonResponse({ error: "targets must be a non-empty array of cli/ide" }, 400);
+        }
+        if (!parsed.includes(entry)) parsed.push(entry);
+      }
+      agyTargets = parsed;
+    }
+    if (provider === "google-antigravity") {
+      // Explicit sync targets: the dashboard requests CLI+IDE by default;
+      // `ocx agy` launch/selection requests CLI only (never an implicit IDE
+      // restart). A repeat request for the already-active account still
+      // re-runs the sync so a previously failed target can be retried.
+      // Atomicity: provider selection + target syncs run in ONE serialized
+      // operation so concurrent B/C switches cannot interleave (B must not
+      // return a stale activeAccountId while C's sync is in flight).
+      const { switchAgyActiveAccountWithSync } = await import("../../clients/agy-account-sync");
+      const { getAccountSet } = await import("../../oauth/store");
+      const sync = await switchAgyActiveAccountWithSync(body.accountId, {
+        targets: agyTargets,
+        setActiveImpl: (p, id) => setActiveAccount(p, id),
+        getActiveImpl: () => getAccountSet("google-antigravity")?.activeAccountId ?? body.accountId,
+      });
+      if (!sync.switched) return jsonResponse({ error: "account not found" }, 404);
+      const { clearModelCache } = await import("../../codex/model-cache");
+      const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
+      clearModelCache(provider);
+      clearGatherRoutedModelsInflight();
+      const { clearProviderQuotaCache } = await import("../../providers/quota");
+      clearProviderQuotaCache();
+      // HTTP 200 carries the operation outcome: transport succeeded, so the
+      // proxy active account IS switched; per-target sync states (including
+      // failures) ride in the body and must be read instead of the status.
+      return jsonResponse({
+        ok: sync.ok,
+        provider,
+        activeAccountId: sync.activeAccountId,
+        requestedTargets: sync.requestedTargets,
+        code: sync.code,
+        message: sync.message,
+        ...(sync.cli ? { cli: sanitizeAgyTargetResult(sync.cli as unknown as Record<string, unknown>) } : {}),
+        ...(sync.ide ? { ide: sanitizeAgyTargetResult(sync.ide as unknown as Record<string, unknown>) } : {}),
+      });
+    }
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
     if (provider === "anthropic") {
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
-    }
-    if (provider === "google-antigravity") {
-      try {
-        const { syncAntigravityCredentialsToGemini } = await import("../../cli/agy");
-        await syncAntigravityCredentialsToGemini(body.accountId);
-      } catch {}
     }
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");

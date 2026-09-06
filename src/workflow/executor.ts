@@ -14,9 +14,12 @@
  * `--auto` keeps advancing until the next gate, manual phase, or completion.
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { advanceRun, resolveModelRef, WorkflowError } from "./engine";
-import { getDefinition, loadTask, saveTask } from "./store";
+import { definitionForTask, loadTask, saveTask } from "./store";
+import { activeExecution, claimExecution, executionKey, releaseExecution, type PhaseExecution } from "./execution-state";
+import { collectDiff, validateWorkspace } from "./workspace";
+import { buildAgentCommand } from "./agent-command";
 import type { WorkflowDefinition, WorkflowPhase, WorkflowTask } from "./types";
 
 export interface ExecutorOptions {
@@ -28,6 +31,9 @@ export interface ExecutorOptions {
   chatTimeoutMs?: number;
   /** Timeout for agent spawns, ms (default 3600000). */
   agentTimeoutMs?: number;
+  signal?: AbortSignal;
+  /** Called after automated transitions by the server's composition layer. */
+  onTransition?: () => void;
 }
 
 export interface ExecutionResult {
@@ -36,34 +42,53 @@ export interface ExecutionResult {
   tokens?: { promptTokens: number; completionTokens: number; totalTokens: number };
   error?: string;
   mode: "chat" | "agent" | "manual";
+  phaseIndex?: number;
+  attemptId?: string;
 }
 
 const inFlight = new Map<string, Promise<void>>();
 
-export function isExecuting(taskId: string): boolean {
-  return inFlight.has(taskId);
+export function isExecuting(taskId: string, baseDir?: string): boolean {
+  return inFlight.has(executionKey(taskId, baseDir)) || !!activeExecution(taskId, baseDir);
 }
 
 /** Resolves when the task's in-flight execution pipeline finishes (test/CLI convenience). */
-export async function waitForExecution(taskId: string, timeoutMs = 15_000): Promise<void> {
-  const pipeline = inFlight.get(taskId);
+export async function waitForExecution(taskId: string, timeoutMs = 15_000, baseDir?: string): Promise<void> {
+  const pipeline = baseDir ? inFlight.get(executionKey(taskId, baseDir))
+    : [...inFlight].find(([key]) => key.endsWith(`:${taskId}`))?.[1];
   if (!pipeline) return;
-  await Promise.race([
-    pipeline,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("execution timed out")), timeoutMs)),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([pipeline, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("execution timed out")), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 /** Assemble the phase prompt, appending earlier phases' outputs named in `inputs`. */
 export function assemblePrompt(phase: WorkflowPhase, definition: WorkflowDefinition, task: WorkflowTask): string {
   const parts: string[] = [];
   if (task.title) parts.push(`# Task\n${task.title}`);
+  if (task.requirements) parts.push(`# Requirements\n${task.requirements}`);
   if (phase.prompt) parts.push(phase.prompt);
   for (const input of phase.inputs ?? []) {
+    if (input === "requirements") continue;
+    if (input === "diff") {
+      const evidence = task.phases[task.phaseIndex].evidence;
+      if (!evidence) throw new WorkflowError("diff evidence is missing; execute this phase to collect it", 409);
+      parts.push(`# Code diff (${evidence.baseRevision} → ${evidence.headRevision}, including working-tree changes)\n${evidence.diff}`);
+      continue;
+    }
     const index = task.phases.findIndex(p => p.id === input);
     if (index < 0 || index >= task.phaseIndex) continue;
     const output = task.phases[index].outputs?.trim();
     if (output) parts.push(`# Output of phase '${input}'\n${output}`);
+  }
+  if (task.rework?.targetPhaseId === phase.id) {
+    parts.push(`# Rework request\n${task.rework.note || "Address the rejected result."}`);
+    for (const previous of task.rework.phases) {
+      if (previous.outputs) parts.push(`# Previous ${previous.id}\n${previous.outputs}`);
+    }
   }
   return parts.join("\n\n");
 }
@@ -88,7 +113,7 @@ async function runChatPhase(
         stream: false,
         messages: [{ role: "user", content: prompt }],
       }),
-      signal: controller.signal,
+      signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal,
     });
     if (!res.ok) {
       const text = (await res.text()).slice(0, 500);
@@ -119,53 +144,53 @@ async function runChatPhase(
 }
 
 async function runAgentPhase(
-  modelRef: string,
-  prompt: string,
-  opts: ExecutorOptions,
-  workspaceDir?: string,
+  phase: WorkflowPhase, task: WorkflowTask, modelRef: string, prompt: string, opts: ExecutorOptions,
 ): Promise<ExecutionResult> {
-  // Codex leads every workflow, so agent phases exec codex with the pinned model.
-  const args = ["exec", "-m", modelRef, prompt];
+  if (!task.workspaceDir) throw new WorkflowError("agent execution requires an explicit workspaceDir", 409);
+  const workspaceDir = validateWorkspace(task.workspaceDir);
+  const command = buildAgentCommand(phase, task, modelRef,
+    "You are executing one delegated workflow phase. Return the result and verification evidence. The workflow engine owns transitions; do not call workflow advance, gate, or execute commands.\n\n" + prompt);
   return new Promise<ExecutionResult>(resolve => {
     let stdout = "";
     let stderr = "";
-    let settled = false;
-    const child = spawn("codex", args, {
-      cwd: workspaceDir || process.cwd(),
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
+    let failure: string | undefined;
+    const child = spawn(command.bin, command.args, {
+      cwd: workspaceDir, shell: false, detached: process.platform !== "win32",
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        child.kill("SIGKILL");
-        resolve({ ok: false, mode: "agent", error: `agent phase timed out after ${opts.agentTimeoutMs ?? 3_600_000}ms` });
-      }
-    }, opts.agentTimeoutMs ?? 3_600_000);
+    const stop = (reason: string) => {
+      failure = reason;
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else if (child.pid) {
+          const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+          execFileSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], { stdio: "pipe", windowsHide: true, timeout: 5_000 });
+        }
+      } catch { child.kill("SIGKILL"); }
+    };
+    const abort = () => stop("agent execution aborted");
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => stop("agent phase timed out"), opts.agentTimeoutMs ?? 3_600_000);
+    const cleanup = () => { clearTimeout(timer); opts.signal?.removeEventListener("abort", abort); };
+    child.stdin?.on("error", () => {}); // A failed/early-exiting CLI can close stdin first.
+    child.stdin?.end(command.stdin);
     child.stdout?.on("data", d => {
       stdout += d.toString();
-      if (stdout.length > 512_000) stdout = stdout.slice(-256_000);
+      if (stdout.length > 2_000_000) stop("agent output exceeded 2 MB; output was not accepted");
     });
-    child.stderr?.on("data", d => {
-      stderr += d.toString();
+    child.stderr?.on("data", d => { stderr = (stderr + d.toString()).slice(-32_000); });
+    child.on("error", error => {
+      cleanup();
+      resolve({ ok: false, mode: "agent", error: `failed to spawn ${command.bin}: ${error.message}` });
     });
-    child.on("error", err => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: false, mode: "agent", error: `failed to spawn codex: ${err.message}` });
+    child.on("close", (code, signal) => {
+      cleanup();
+      const output = stdout.trim();
+      if (failure || code !== 0 || !output) {
+        resolve({ ok: false, mode: "agent", error: failure || `${command.bin} exited (${code ?? signal}): ${stderr.slice(-500) || "no output"}` });
+      } else resolve({ ok: true, mode: "agent", outputs: output });
     });
-    child.on("close", code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const output = stdout.trim() || stderr.trim();
-      if (code === 0 || code === null) {
-        resolve({ ok: output.length > 0, mode: "agent", outputs: output || undefined, error: output ? undefined : "agent run produced no output" });
-      } else {
-        resolve({ ok: false, mode: "agent", error: `codex exec exited with code ${code}: ${(stderr || stdout).slice(0, 500)}` });
-      }
-    });
+    if (opts.signal?.aborted) abort();
   });
 }
 
@@ -181,92 +206,89 @@ export async function executeCurrentPhase(taskId: string, opts: ExecutorOptions,
       ? `run ${taskId} is waiting at gate '${task.currentGate?.id}'`
       : `run ${taskId} is ${task.status}`, 409);
   }
-  const definition = getDefinition(task.workflowId, baseDir);
+  const definition = definitionForTask(task, baseDir);
   if (!definition) throw new WorkflowError(`workflow '${task.workflowId}' no longer exists`, 404);
   const phase = definition.phases[task.phaseIndex];
-  if (phase.gate) throw new WorkflowError(`phase '${phase.id}' is a gate`, 409);
-
+  if (!phase || phase.gate) throw new WorkflowError("current phase is not executable", 409);
   const resolved = resolveModelRef(phase, definition, task);
-  if (!resolved.modelRef) {
-    throw new WorkflowError(
-      `phase '${phase.id}' has no model — pin it with --set or run it manually, then advance`, 409);
-  }
-  const prompt = assemblePrompt(phase, definition, task);
-  const result = phase.mode === "agent"
-    ? await runAgentPhase(resolved.modelRef, prompt, opts, task.workspaceDir)
-    : await runChatPhase(phase, resolved.modelRef, prompt, opts);
-  if (!result.ok) {
-    // Record at the point of failure so any caller (and the dashboard) sees why the
-    // phase is stuck; a retry overwrites it.
-    applyError(taskId, result.error, baseDir);
-  }
-  return result;
+  if (!resolved.modelRef) throw new WorkflowError(`phase '${phase.id}' has no model — pin it or run manually`, 409);
+  if (activeExecution(taskId, baseDir)) throw new WorkflowError("phase is already executing", 409);
+  const execution = claimExecution(taskId, task.phaseIndex, task.phases[task.phaseIndex].attemptId, baseDir);
+  try {
+    if (phase.inputs?.includes("diff")) {
+      const collected = task.phases.find(p => p.id === "collect-diff" && p.status === "done")?.evidence;
+      task.phases[task.phaseIndex].evidence = collected ?? collectDiff(task.workspaceDir, task.baseRevision);
+      saveTask(task, baseDir);
+    }
+    const prompt = assemblePrompt(phase, definition, task);
+    const options = { ...opts, signal: opts.signal ? AbortSignal.any([opts.signal, execution.controller.signal]) : execution.controller.signal };
+    const result = phase.mode === "agent"
+      ? await runAgentPhase(phase, task, resolved.modelRef, prompt, options)
+      : await runChatPhase(phase, resolved.modelRef, prompt, options);
+    if (!result.ok) applyError(taskId, result.error, execution, baseDir);
+    return { ...result, phaseIndex: execution.phaseIndex, attemptId: execution.attemptId };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    applyError(taskId, message, execution, baseDir);
+    return { ok: false, mode: phase.mode || "chat", error: message, phaseIndex: execution.phaseIndex, attemptId: execution.attemptId };
+  } finally { releaseExecution(taskId, execution, baseDir); }
 }
 
-function applyResult(taskId: string, result: ExecutionResult, baseDir?: string): void {
+function sameAttempt(task: WorkflowTask, result: { phaseIndex?: number; attemptId?: string }): boolean {
+  return task.status === "running" && task.phaseIndex === result.phaseIndex
+    && task.phases[task.phaseIndex]?.attemptId === result.attemptId;
+}
+
+function applyResult(taskId: string, result: ExecutionResult, baseDir?: string): boolean {
   const task = loadTask(taskId, baseDir);
-  if (!task) return;
-  const definition = getDefinition(task.workflowId, baseDir);
+  if (!task || !sameAttempt(task, result)) return false;
   const state = task.phases[task.phaseIndex];
-  if (!definition || !state) return;
-  if (result.ok) {
-    state.outputs = result.outputs;
-    if (result.tokens) state.tokens = result.tokens;
-    state.error = undefined;
-    saveTask(task, baseDir);
-    advanceRun(taskId, { outputs: result.outputs }, baseDir);
-  } else {
-    state.error = result.error;
-    saveTask(task, baseDir);
-  }
+  if (!result.ok) return false;
+  state.outputs = result.outputs;
+  state.tokens = result.tokens;
+  state.error = undefined;
+  saveTask(task, baseDir);
+  advanceRun(taskId, { outputs: result.outputs }, baseDir);
+  return true;
 }
 
-/**
- * Fire-and-forget execution of the current phase, then — when `auto` — keep
- * executing/advancing until a gate, a manual phase, or completion. Concurrent
- * calls for the same task share one in-flight pipeline.
- */
+/** Execute serially until a gate, manual phase, error, or completion. */
 export function kickExecution(
-  taskId: string,
-  opts: ExecutorOptions & { auto?: boolean },
-  baseDir?: string,
+  taskId: string, opts: ExecutorOptions & { auto?: boolean }, baseDir?: string,
 ): { started: true } | { started: false; reason: string } {
-  if (inFlight.has(taskId)) return { started: false, reason: "already executing" };
+  const key = executionKey(taskId, baseDir);
+  if (isExecuting(taskId, baseDir)) return { started: false, reason: "already executing" };
+  const initial = loadTask(taskId, baseDir);
+  if (!initial) throw new WorkflowError(`unknown run '${taskId}'`, 404);
+  if (initial.status !== "running") throw new WorkflowError(`run is ${initial.status}`, 409);
   const pipeline = (async () => {
-    try {
-      for (;;) {
-        const task = loadTask(taskId, baseDir);
-        if (!task || task.status !== "running") return;
-        const definition = getDefinition(task.workflowId, baseDir);
-        const phase = definition?.phases[task.phaseIndex];
-        if (!definition || !phase || phase.gate) return;
-        if (!resolveModelRef(phase, definition, task).modelRef) return; // manual phase
+    for (;;) {
+      const task = loadTask(taskId, baseDir);
+      if (!task || task.status !== "running") return;
+      const definition = definitionForTask(task, baseDir);
+      const phase = definition?.phases[task.phaseIndex];
+      if (!definition || !phase || phase.gate || !resolveModelRef(phase, definition, task).modelRef) return;
+      try {
         const result = await executeCurrentPhase(taskId, opts, baseDir);
-        if (!result.ok) {
-          applyError(taskId, result.error, baseDir);
-          return;
-        }
-        applyResult(taskId, result, baseDir);
-        const after = loadTask(taskId, baseDir);
-        if (!after || after.status !== "running") return; // gate or completed
+        if (!applyResult(taskId, result, baseDir)) return;
+        opts.onTransition?.();
         if (!opts.auto) return;
+      } catch (error) {
+        applyError(taskId, error instanceof Error ? error.message : String(error),
+          { phaseIndex: task.phaseIndex, attemptId: task.phases[task.phaseIndex].attemptId }, baseDir);
+        return;
       }
-    } catch (error) {
-      // Synchronous engine failures (unknown task, validation) must not surface as
-      // unhandled rejections — the phase state carries the error instead.
-      applyError(taskId, error instanceof Error ? error.message : String(error), baseDir);
     }
   })();
-  inFlight.set(taskId, pipeline);
-  void pipeline.finally(() => inFlight.delete(taskId));
+  inFlight.set(key, pipeline);
+  void pipeline.finally(() => inFlight.delete(key));
   return { started: true };
 }
 
-function applyError(taskId: string, error: string | undefined, baseDir?: string): void {
+function applyError(taskId: string, error: string | undefined, execution: Pick<PhaseExecution, "phaseIndex" | "attemptId">, baseDir?: string): void {
   const task = loadTask(taskId, baseDir);
-  if (!task) return;
-  const state = task.phases[task.phaseIndex];
-  if (!state) return;
-  state.error = error;
+  if (!task || !sameAttempt(task, execution)) return;
+  task.phases[task.phaseIndex].error = error;
+  task.updatedAt = Date.now();
   saveTask(task, baseDir);
 }

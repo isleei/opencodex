@@ -150,6 +150,7 @@ export default defineConfig({
             { label: "Architecture", translations: { fr: "Architecture", ko: "아키텍처", "zh-CN": "架构", "zh-TW": "架構", ru: "Архитектура", ja: "アーキテクチャ", tr: "Mimari" }, slug: "reference/architecture" },
             { label: "Proxy API Formats", translations: { fr: "Formats de l’API proxy", ko: "프록시 API 형식", "zh-CN": "代理 API 格式", "zh-TW": "代理 API 格式", ru: "Форматы API прокси", ja: "プロキシAPI形式", tr: "Proxy API Formatları" }, slug: "reference/proxy-formats" },
             { label: "Management API", translations: { fr: "API de gestion", ko: "관리 API", "zh-CN": "管理 API", "zh-TW": "管理 API", ru: "API управления", ja: "管理API", tr: "Yönetim API'si" }, slug: "reference/management-api" },
+            { label: "AGY Accounts", translations: { fr: "Comptes AGY", ko: "AGY 계정", "zh-CN": "AGY 账号", "zh-TW": "AGY 帳號", ru: "Аккаунты AGY", ja: "AGY アカウント", tr: "AGY Hesapları" }, slug: "reference/agy-accounts" },
           ],
         },
         {
