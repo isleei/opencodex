@@ -41,6 +41,6 @@ test("routing respects the most consumed subscription window and its actual rese
   Object.assign(body.groups[0]!.buckets[0]!, { remainingFraction: 0, resetTime: "2026-09-11T03:57:29Z" });
   install(body);
   const quota = await fetchAntigravityUsageQuota("fixture-token", "fixture-project");
-  expect(quota?.customWindows?.[0]).toEqual({ label: "Gem", percent: 100, resetAt: Date.parse("2026-09-11T03:57:29Z") });
+  expect(quota?.customWindows?.find(w => w.label === "Gem (Weekly)")).toEqual({ label: "Gem (Weekly)", percent: 100, resetAt: Date.parse("2026-09-11T03:57:29Z") });
   expect(quota?.agyQuotaGroups?.[0]?.windows[1]?.resetAt).toBeUndefined();
 });

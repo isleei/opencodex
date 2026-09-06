@@ -63,3 +63,12 @@ export interface ProviderQuota {
   agyQuotaGroups?: AgyQuotaGroup[];
   updatedAt: number;
 }
+
+export type AccountQuotaMode = "probe" | "passive" | "unsupported";
+
+/** Additive management-row fields; cheap lists emit only quotaMode. */
+export interface AccountQuotaFields {
+  quotaMode?: AccountQuotaMode;
+  quota?: ProviderQuota | null;
+  quotaUnavailable?: boolean;
+}
