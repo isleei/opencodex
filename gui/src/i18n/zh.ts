@@ -756,6 +756,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.conversation": "会话",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "时间",
   "logs.col.request": "请求",
   "logs.col.model": "模型",

@@ -706,6 +706,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.conversation": "会話",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "時刻",
   "logs.col.request": "リクエスト",
   "logs.col.model": "モデル",

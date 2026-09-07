@@ -762,6 +762,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.conversation": "Sohbet",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "Zaman",
   "logs.col.request": "İstek",
   "logs.col.model": "Model",

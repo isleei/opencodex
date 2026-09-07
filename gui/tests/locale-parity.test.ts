@@ -80,6 +80,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "dash.mem.jsHeapArena",
   "logs.badge.claude",
   "logs.badge.grok",
+  "logs.badge.agy",
   "logs.col.estimatedCost",
   "logs.col.tokPerSec",
   "logs.detail.ttft",

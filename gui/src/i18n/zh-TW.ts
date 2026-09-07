@@ -756,6 +756,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.conversation": "對話",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "時間",
   "logs.col.request": "請求",
   "logs.col.model": "模型",

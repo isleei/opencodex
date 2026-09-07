@@ -14,8 +14,8 @@ import {
 } from "../icons";
 import { providerIconSrc } from "../provider-icons";
 import { displayAccountId } from "../lib/privacy";
-import QuotaBars from "../components/QuotaBars";
-import { agyRemaining, formatAgyObservedAt, formatAgyResetAt, resolveAgyQuota } from "../lib/agy-quota";
+import QuotaBars, { isQuotaExhausted, isQuotaWarn } from "../components/QuotaBars";
+import { formatAgyObservedAt, formatAgyResetAt, resolveAgyQuota } from "../lib/agy-quota";
 import "../styles-subscriptions.css";
 
 interface OAuthAccount {
@@ -782,9 +782,13 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
               );
 
               const renderQuotaModel = (model: (typeof agyQuota.buckets)[number]) => {
-                const remaining = agyRemaining(model.percent);
+                // Same presentation as the Providers page: USED% with the shared
+                // 80/99.5 warn/exhausted cutoffs (QuotaBars threshold={80}).
+                const used = typeof model.percent === "number" && model.percent >= 0 && model.percent <= 100
+                  ? model.percent
+                  : null;
                 const resetText = formatAgyResetAt(model.resetAt);
-                const tone = agyQuota.status === "stale" ? "stale" : remaining === null ? "green" : remaining > 70 ? "green" : remaining > 30 ? "amber" : "red";
+                const tone = agyQuota.status === "stale" ? "stale" : used === null ? "green" : isQuotaExhausted(used) ? "red" : isQuotaWarn(used, 80) ? "amber" : "green";
                 return (
                   <div key={model.bucketId} className="cockpit-quota-metric">
                     <div className="cockpit-metric-head">
@@ -792,15 +796,15 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                         {t(model.group === "gemini" ? "subscriptions.agy.quota.gemini" : "subscriptions.agy.quota.claudeGpt")} · {t(model.window === "weekly" ? "subscriptions.agy.quota.weekly" : "subscriptions.agy.quota.fiveHour")}
                       </span>
                       <span className={`cockpit-metric-val ${tone}`}>
-                        {remaining === null
+                        {used === null
                           ? t("subscriptions.agy.quota.unknown")
-                          : t("subscriptions.agy.quota.remaining", { pct: String(Number(remaining.toFixed(2))) })}
+                          : t("quota.usedPercent", { pct: Math.round(used) })}
                       </span>
                     </div>
                     <div className="cockpit-progress-bg">
                       <div
                         className={`cockpit-progress-fill ${tone}`}
-                        style={{ width: `${remaining === null ? 0 : Math.round(remaining)}%` }}
+                        style={{ width: `${used === null ? 0 : Math.round(used)}%` }}
                       />
                     </div>
                     <span className="cockpit-metric-time">

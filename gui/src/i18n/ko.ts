@@ -763,6 +763,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.conversation": "대화",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "시간",
   "logs.col.request": "요청",
   "logs.col.model": "모델",

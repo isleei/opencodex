@@ -761,6 +761,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.conversation": "Диалог",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "Время",
   "logs.col.request": "Запрос",
   "logs.col.model": "Модель",

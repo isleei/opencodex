@@ -777,6 +777,7 @@ export const en = {
   "logs.detail.conversation": "Conversation",
   "logs.badge.claude": "Claude",
   "logs.badge.grok": "Grok",
+  "logs.badge.agy": "AGY",
   "logs.col.time": "Time",
   "logs.col.request": "Request",
   "logs.col.model": "Model",
