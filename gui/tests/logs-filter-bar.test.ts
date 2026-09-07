@@ -13,14 +13,14 @@ test("surface radios support wrapping arrows and Home/End with roving focus", ()
   const win = new Window();
   Object.defineProperty(globalThis, "document", { configurable: true, value: win.document });
   try {
-    for (const surface of ["all", "claude", "codex", "grok"]) {
+    for (const surface of ["all", "claude", "codex", "grok", "agy", "opencode"]) {
       const button = win.document.createElement("button");
       button.id = `logs-surface-${surface}`;
       win.document.body.append(button);
     }
     const selected: string[] = [];
     const key = (value: string) => ({ key: value, preventDefault() {}, } as never);
-    logsSurfaceKeyDown(key("ArrowRight"), "grok", surface => selected.push(surface));
+    logsSurfaceKeyDown(key("ArrowRight"), "opencode", surface => selected.push(surface));
     expect(selected).toEqual(["all"]);
     expect(win.document.activeElement?.id).toBe("logs-surface-all");
     logsSurfaceKeyDown(key("Home"), "codex", surface => selected.push(surface));
@@ -162,8 +162,8 @@ test("LogsFilterBar rendered radios move selection, focus and the single tab sto
     const radio = (surface: string) => ui.container.querySelector<HTMLButtonElement>(`#logs-surface-${surface}`)!;
     radio("all").focus();
     const moves = [
-      ["ArrowLeft", "grok"], ["ArrowRight", "all"], ["ArrowDown", "claude"],
-      ["ArrowUp", "all"], ["End", "grok"], ["Home", "all"],
+      ["ArrowLeft", "opencode"], ["ArrowRight", "all"], ["ArrowDown", "claude"],
+      ["ArrowUp", "all"], ["End", "opencode"], ["Home", "all"],
     ] as const;
     for (const [key, expected] of moves) {
       const event = new ui.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });

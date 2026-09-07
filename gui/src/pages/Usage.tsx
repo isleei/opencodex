@@ -12,7 +12,7 @@ import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 
 type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok" | "agy";
+type UsageSurface = "all" | "codex" | "claude" | "grok" | "agy" | "opencode";
 
 interface UsageSummaryTotals {
   requests: number;
@@ -250,7 +250,7 @@ function UsageFilters({
   return (
     <div className="usage-filters">
       <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok", "agy"] as UsageSurface[]).map(choice => {
+        {(["all", "codex", "claude", "grok", "agy", "opencode"] as UsageSurface[]).map(choice => {
           const label = t(`logs.filter.surface.${choice}`);
           return (
             <button
@@ -272,6 +272,9 @@ function UsageFilters({
               )}
               {choice === "agy" && (
                 <img className="usage-source-mark" src="/provider-icons/antigravity-color.svg" alt="" aria-hidden="true" />
+              )}
+              {choice === "opencode" && (
+                <img className="usage-source-mark" src="/provider-icons/opencode.svg" alt="" aria-hidden="true" />
               )}
               <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
                 {label}

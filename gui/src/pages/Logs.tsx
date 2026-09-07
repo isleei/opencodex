@@ -844,6 +844,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                         <span className="badge badge-accent">{t("logs.badge.claude")}</span>
                       )}
                       {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
+                      {(log.surface === "agy" || log.surface === "antigravity") && (
+                        <span className="badge badge-accent">AGY</span>
+                      )}
+                      {log.surface === "opencode" && (
+                        <span className="badge badge-accent">OpenCode</span>
+                      )}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
