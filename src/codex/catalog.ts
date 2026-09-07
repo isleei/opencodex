@@ -9,7 +9,7 @@ export { applyProviderConfigHints, isDatedVariantId, filterCatalogVisibleModels,
 export type { GatherRoutedModelsOptions } from "./catalog/provider-fetch";
 export { deriveComboCatalogModel, exactComboCatalogSlugs, getLastComboCatalogOmissions, resetOpenAiApiCatalogWarningStateForTests, uniqueCatalogModelsForPublicList, uniqueCatalogModelsForRawPublicList, buildComboCatalogOmission, comboCatalogOmissionReason, summarizeComboCatalogOmissions } from "./catalog/aggregation";
 export type { ComboCatalogOmission, ComboCatalogOmissionReason } from "./catalog/aggregation";
-export { MAX_SPAWN_AGENT_MODEL_OVERRIDES, CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, effectiveSubagentRoster, buildCatalogEntries, mergeCatalogEntriesFromObservedState, resetCatalogRuntimeStateForTests, orderForSubagents, mergeCatalogEntriesForSync, syncCatalogModels, restoreCodexCatalog, invalidateCodexModelsCache, finalizeAutoReviewModelOverride } from "./catalog/sync";
+export { MAX_SPAWN_AGENT_MODEL_OVERRIDES, CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, effectiveSubagentRoster, buildCatalogEntries, mergeCatalogEntriesFromObservedState, resetCatalogRuntimeStateForTests, orderForSubagents, orderForModelPicker, mergeCatalogEntriesForSync, syncCatalogModels, restoreCodexCatalog, invalidateCodexModelsCache, finalizeAutoReviewModelOverride } from "./catalog/sync";
 export type { ObservedCatalogMergeInput } from "./catalog/sync";
 export type { SpawnAgentSurface, SubagentRosterExclusionReason, EffectiveSubagentModel, SubagentRosterExclusion, EffectiveSubagentRoster } from "./catalog/sync";
 export { accountBoundNativeDisplayName, accountBoundNativeModelSlugs, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./catalog/account-models";

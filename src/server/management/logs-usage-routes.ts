@@ -66,6 +66,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { addRequestLog, filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
+import { decodeRequestLogCursor, selectRequestLogPoll } from "../request-log-cursor";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt, UsageStatus } from "../../usage/log";
 import { isKnownUsageSurface } from "../../usage/log";
@@ -235,13 +236,20 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
+    const rawCursor = url.searchParams.get("cursor");
+    const cursor = rawCursor === null ? null : decodeRequestLogCursor(rawCursor);
+    if (rawCursor !== null && cursor === null) {
+      return jsonResponse({ error: { code: "invalid_cursor", message: "invalid cursor" } }, 400);
+    }
     const all = getRequestLogEntries();
     const total = filteredRequestLogCount(all, url.searchParams);
-    const logs = filterRequestLogs(all, url.searchParams);
+    const logs = filterRequestLogs(all, url.searchParams).map(requestLogDto);
+    const poll = selectRequestLogPoll(logs, url.searchParams, cursor);
     return jsonResponse({
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      generatedAt: Date.now(),
       total,
-      logs: logs.map(requestLogDto),
+      ...poll,
     });
   }
 

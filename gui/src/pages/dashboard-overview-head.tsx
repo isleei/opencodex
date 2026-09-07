@@ -60,16 +60,16 @@ export function DashboardOverviewHead({
                 <IconInfo width={14} height={14} aria-hidden="true" />
               </button>
             </div>
-            <div className="value" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+            <div className="value" style={{ display: "flex", alignItems: "center" }}>
+              <div className="dash-ma-switch" role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
                 {(["v1", "default", "v2"] as const).map(mode => (
                   <button
                     key={mode}
                     type="button"
                     role="radio"
                     aria-checked={maMode === mode}
-                    className={`btn btn-sm text-caption${maMode === mode ? " btn-primary" : " btn-ghost"}`}
-                    style={{ borderRadius: "var(--radius-pill)", minWidth: 36, padding: "5px 10px", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
+                    className={`btn btn-sm text-caption dash-ma-option${maMode === mode ? " btn-primary" : " btn-ghost"}`}
+                    style={{ borderRadius: "var(--radius-pill)", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
                     disabled={maBusy}
                     onClick={() => void switchMaMode(mode)}
                   >{t(`models.v2Mode_${mode}` as TKey)}</button>
@@ -90,12 +90,12 @@ export function DashboardOverviewHead({
           </div>
           <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.versionLocal")}</div>
-            <div className="value mono" title={installKind}>{localVersion}</div>
+            <div className="value mono dash-stat-version" title={installKind}>{localVersion}</div>
             <div className="muted text-label dash-stat-coverage">{installKind}</div>
           </div>
           <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.versionRemote")}</div>
-            <div className="value mono" style={remoteBehind ? { color: "var(--amber, var(--orange, #d97706))" } : undefined}>
+            <div className="value mono dash-stat-version" style={remoteBehind ? { color: "var(--amber, var(--orange, #d97706))" } : undefined}>
               {remoteVersion}
             </div>
             <div className="muted text-label dash-stat-coverage">

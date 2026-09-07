@@ -382,7 +382,14 @@ test("the route inventory contains exactly the specified 10 + 14 + 2 + 2 converg
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
     const source = readFileSync(repoPath("src", "server", "management", file as string), "utf8");
-    const count = source.match(/await convergeCodexCatalog\(\)/g)?.length ?? 0;
+    const direct = source.match(/await convergeCodexCatalog\(\)/g)?.length ?? 0;
+    const shared = source.match(/await convergeVisibleCatalogs\(\)/g)?.length ?? 0;
+    if (file === "model-routes.ts") {
+      const helper = source.slice(source.indexOf("const convergeVisibleCatalogs ="), source.indexOf('if (url.pathname ==='));
+      expect(helper.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
+      expect(shared).toBe(5);
+    }
+    const count = file === "model-routes.ts" ? direct - 1 + shared : direct;
     expect(count).toBe(expected);
     expect(source).not.toContain("refreshCodexCatalogBestEffort");
     return [file, count];
@@ -435,7 +442,9 @@ test("both model-preset write paths converge the Codex catalog", () => {
   const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
   // The "all" branch and the materialize branch each converge; "custom" only moves the marker,
   // so it deliberately does not.
-  expect(handlerBody.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(2);
+  expect(handlerBody.match(/await convergeVisibleCatalogs\(\)/g)?.length).toBe(2);
+  const customBranch = handlerBody.slice(handlerBody.indexOf('if (mode === "custom")'), handlerBody.indexOf("const preset ="));
+  expect(customBranch).not.toMatch(/await converge(?:CodexCatalog|VisibleCatalogs)\(\)/);
 });
 
 /**

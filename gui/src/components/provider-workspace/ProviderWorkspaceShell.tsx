@@ -24,19 +24,7 @@ import {
 import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
-import {
-  buildProviderModelUsage,
-  buildProviderUsageTotals,
-  countAvailableModels,
-  parseAvailableModels,
-  parseLiveModelCounts,
-  parseModelsRefreshing,
-  parseSelectedModels,
-  type ProviderAvailableModels,
-  type ProviderLiveModelCounts,
-  type ProviderModelCounts,
-  type ProviderSelectedModels,
-} from "../../provider-workspace/usage";
+import { buildProviderModelUsage, buildProviderUsageTotals } from "../../provider-workspace/usage";
 import {
   freshQuotaReportRecord,
   freshQuotaReportsFromResponse,
@@ -47,6 +35,9 @@ import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
 import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
+
+import type { ModelRow } from "../../pages/models-shared";
+import { parseModelInventory, countModelInventory, parseModelSelection } from "../../provider-workspace/model-inventory";
 
 export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: boolean };
 
@@ -59,22 +50,13 @@ export interface DetailSlotData {
   /** Did the last successful discovery return rows? Server-reported, never inferred. */
   hasLiveModels: boolean;
   selectedModels: string[];
+  modelRows: ModelRow[] | null;
+  modelRevision: string;
+  modelRowsReady: boolean;
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
   onRetryModels?: () => void;
-  /**
-   * After a force-refresh: optionally paint the returned ids immediately, then reload
-   * /api/selected-models so counts and selection stay authoritative.
-   */
-  onRefreshModels?: (result?: ProviderModelsRefreshResult) => void | Promise<void>;
 }
-
-/** Payload the Models tab hands back after POST /api/providers/refresh-models. */
-export type ProviderModelsRefreshResult = {
-  models: string[];
-  liveModelCount?: number;
-  persisted?: boolean;
-};
 
 const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za" | "pws.sort.freePaid" | "pws.sort.paidFree" | "pws.sort.accountsFirst" }[] = [
   { id: "az", labelKey: "pws.sort.az" },
@@ -161,10 +143,9 @@ export default function ProviderWorkspaceShell({
   const [sortMode, setSortMode] = useState<ProviderSortMode>("az");
   const [filterOpen, setFilterOpen] = useState(false);
   const [railFocusName, setRailFocusName] = useState<string | null>(null);
-  const [modelCounts, setModelCounts] = useState<ProviderModelCounts>({});
-  const [availableModels, setAvailableModels] = useState<ProviderAvailableModels>({});
-  const [liveModelCounts, setLiveModelCounts] = useState<ProviderLiveModelCounts>({});
-  const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
+  const [modelSnapshot, setModelSnapshot] = useState<{
+    revision: string; rows: ModelRow[]; selection: ReturnType<typeof parseModelSelection>;
+  } | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
@@ -184,6 +165,11 @@ export default function ProviderWorkspaceShell({
     return !cached || Object.keys(cached).length === 0;
   });
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
+  const modelRevision = JSON.stringify([apiBase, modelsRefreshToken, modelsLoadEpoch]);
+  const modelRowsReady = modelSnapshot?.revision === modelRevision && !modelsLoading && !modelsLoadFailed;
+  const modelCounts = useMemo(() => countModelInventory(modelSnapshot?.rows ?? []), [modelSnapshot]);
+  const modelsSettled = useRef(onModelsSettled);
+  useEffect(() => { modelsSettled.current = onModelsSettled; }, [onModelsSettled]);
   const filterWrapRef = useRef<HTMLDivElement>(null);
   // Shared usage-summary key: all four subscribers raise the deadline together (30d usage is ~5s cold).
   const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => { const res = await fetch(apiBase + "/api/usage?range=30d", { signal }); if (!res.ok) throw new Error(String(res.status)); return await res.json(); }, { deadlineMs: 60_000 });
@@ -193,100 +179,48 @@ export default function ProviderWorkspaceShell({
     return applyActiveAccountReauth(base, activeAccountNeedsReauth ?? {});
   }, [providers, activeAccountNeedsReauth]);
 
-  const applySelectedModelsPayload = useCallback((data: unknown) => {
-    setModelCounts(countAvailableModels(data));
-    setAvailableModels(parseAvailableModels(data));
-    setLiveModelCounts(parseLiveModelCounts(data));
-    setSelectedModels(parseSelectedModels(data));
-    setModelsLoadFailed(false);
-  }, []);
-
-  const loadSelectedModels = useCallback(async (): Promise<boolean> => {
-    setModelsLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/selected-models`);
-      const data = await readJsonOrThrow(res);
-      applySelectedModelsPayload(data);
-      return true;
-    } catch {
-      setModelsLoadFailed(true);
-      return false;
-    } finally {
-      setModelsLoading(false);
-    }
-  }, [apiBase, applySelectedModelsPayload]);
-
   const retryModels = useCallback(() => {
+    setModelsLoading(true);
+    setModelsLoadFailed(false);
     setModelsLoadEpoch(epoch => epoch + 1);
   }, []);
 
-  /**
-   * After POST /api/providers/refresh-models: paint the returned ids immediately (so the chips
-   * do not wait on a second round-trip), then re-read /api/selected-models for selection/counts.
-   */
-  const refreshModelsList = useCallback(async (result?: ProviderModelsRefreshResult) => {
-    if (selectedName && result?.models) {
-      const models = result.models;
-      setAvailableModels(prev => ({ ...prev, [selectedName]: models }));
-      setModelCounts(prev => ({ ...prev, [selectedName]: models.length }));
-      if (typeof result.liveModelCount === "number") {
-        setLiveModelCounts(prev => ({ ...prev, [selectedName]: result.liveModelCount! }));
-      } else if (models.length > 0) {
-        setLiveModelCounts(prev => ({ ...prev, [selectedName]: models.length }));
-      }
-    }
-    await loadSelectedModels();
-  }, [loadSelectedModels, selectedName]);
-
   useEffect(() => {
-    // Deferred load (matches Models/Usage/ClaudeCode): avoids synchronous setState
-    // inside the effect, per the react-hooks/set-state-in-effect lint gate.
-    //
-    // Cold path returns cache/configured seeds immediately with `refreshing: true` while a
-    // background live gather runs. Re-poll a few times so rail counts fill in without blocking
-    // first paint on multi-second upstream `/models` probes.
     let cancelled = false;
-    let repollTimer: number | null = null;
-    const REPOLL_MS = 1_500;
-    const MAX_REPOLLS = 8;
-    let repolls = 0;
-
-    const loadOnce = async (showLoading: boolean) => {
-      if (showLoading) setModelsLoading(true);
-      let succeeded = false;
-      try {
-        const res = await fetch(`${apiBase}/api/selected-models`);
-        const data = await readJsonOrThrow(res);
-        if (cancelled) return;
-        applySelectedModelsPayload(data);
-        succeeded = true;
-        if (parseModelsRefreshing(data) && repolls < MAX_REPOLLS) {
-          repolls += 1;
-          repollTimer = window.setTimeout(() => {
-            void loadOnce(false);
-          }, REPOLL_MS);
-        }
-      } catch {
-        if (cancelled) return;
-        // Only mark failed on the first paint; background re-polls keep last-good.
-        if (showLoading) setModelsLoadFailed(true);
-      } finally {
-        if (!cancelled && showLoading) {
-          setModelsLoading(false);
-          onModelsSettled?.(succeeded);
-        }
-      }
-    };
-
+    const bounded = createBoundedFetch(60_000);
     const timeout = window.setTimeout(() => {
-      void loadOnce(true);
+      setModelsLoading(true);
+      void (async () => {
+        let succeeded = false;
+        try {
+          // Adopt this pair together. The server does not promise a transaction across reads.
+          const [selection, rows] = await Promise.all([
+            fetch(`${apiBase}/api/selected-models`, { signal: bounded.signal })
+              .then(readJsonOrThrow).then(parseModelSelection),
+            fetch(`${apiBase}/api/models`, { signal: bounded.signal })
+              .then(readJsonOrThrow).then(parseModelInventory),
+          ]);
+          if (cancelled) return;
+          setModelSnapshot({ revision: modelRevision, selection, rows });
+          setModelsLoadFailed(false);
+          succeeded = true;
+        } catch {
+          if (cancelled) return;
+          setModelsLoadFailed(true);
+        } finally {
+          bounded.controller.abort();
+          bounded.clear();
+          if (!cancelled) { setModelsLoading(false); modelsSettled.current?.(succeeded); }
+        }
+      })();
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
-      if (repollTimer != null) window.clearTimeout(repollTimer);
+      bounded.controller.abort();
+      bounded.clear();
     };
-  }, [apiBase, modelsRefreshToken, modelsLoadEpoch, applySelectedModelsPayload, onModelsSettled]);
+  }, [apiBase, modelRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -592,7 +526,7 @@ export default function ProviderWorkspaceShell({
                       item={item}
                       selected={selectedName === item.name}
                       tabbable={railTabbableName === item.name}
-                      modelCount={modelCounts[item.name]}
+                      modelCount={modelSnapshot ? (Object.hasOwn(modelCounts, item.name) ? modelCounts[item.name] : 0) : undefined}
                       isDefault={defaultProvider === item.name}
                       showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name, t))}
                       onClick={() => onSelect(item.name)}
@@ -639,13 +573,15 @@ export default function ProviderWorkspaceShell({
             usageTotals: usageTotals[selectedItem.name],
             modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
-            availableModels: availableModels[selectedItem.name] ?? [],
-            hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
-            selectedModels: selectedModels[selectedItem.name] ?? [],
-            modelsLoading,
+            availableModels: modelSnapshot?.selection.available[selectedItem.name] ?? [],
+            hasLiveModels: (modelSnapshot?.selection.liveModelCounts[selectedItem.name] ?? 0) > 0,
+            selectedModels: modelSnapshot?.selection.selected[selectedItem.name] ?? [],
+            modelRows: modelSnapshot?.rows.filter(row => row.provider === selectedItem.name) ?? null,
+            modelRevision,
+            modelRowsReady,
+            modelsLoading: modelsLoading || (!modelRowsReady && !modelsLoadFailed),
             modelsLoadFailed,
             onRetryModels: retryModels,
-            onRefreshModels: refreshModelsList,
           }) ?? (
             <div className="pws-detail-placeholder">
               <h3>{formatProviderDisplayName(selectedItem.name, t)}</h3>

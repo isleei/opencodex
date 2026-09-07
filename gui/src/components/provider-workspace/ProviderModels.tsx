@@ -1,719 +1,262 @@
-/**
- * ProviderModels — the models tab: searchable wrapping model chips with
- * default/selected flags and full custom-model CRUD (id, display name,
- * context window, modalities). Uses a wrap layout so short lists fill
- * horizontal space instead of a tall single-column stack.
- */
-import { useEffect, useMemo, useRef, useState } from "react";
+/** Canonical inventory and revision-bound custom-definition operations for one provider. */
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { filterModels } from "../../provider-workspace/report";
+import type { ModelRow } from "../../pages/models-shared";
+import { putModelVisibility } from "../../model-visibility";
+import { readJsonOrThrow } from "../../fetch-json";
+import { createBoundedFetch } from "../../bounded-fetch";
+import { catalogRefreshPending, parseCustomModelCreated, parseCustomModelInventory, type CustomModelRecord } from "../../provider-workspace/model-inventory";
 import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
-import { IconRefresh } from "../../icons";
-import { Notice, Select } from "../../ui";
-import { CUSTOM_OPTION } from "../../pages/models-shared";
+import ProviderModelChip from "./ProviderModelChip";
 
-type CustomModelRow = {
-  id: string;
-  modelId: string;
-  displayName?: string;
-  contextWindow?: number;
-  inputModalities?: string[];
+type Mutation = {
+  revision: string;
+  outcome: "saved" | "deleted" | "hidden" | "unconfirmed" | "rejected";
+  refreshPending: boolean;
+  created?: CustomModelRecord;
 };
+const CHIP_RENDER_CAP = 300;
 
-const CONTEXT_PRESETS = [
-  { value: "100000", label: "100k" },
-  { value: "128000", label: "128k" },
-  { value: "200000", label: "200k" },
-  { value: "256000", label: "256k" },
-  { value: "272000", label: "272k" },
-  { value: "352000", label: "352k" },
-  { value: "500000", label: "500k" },
-  { value: "1000000", label: "1M" },
-] as const;
-
-function parseCustomRows(rows: unknown, provider: string): CustomModelRow[] {
-  if (!Array.isArray(rows)) throw new Error("Invalid custom model list");
-  return rows.flatMap(row => {
-    if (!row || typeof row !== "object") return [];
-    const model = row as {
-      id?: unknown;
-      provider?: unknown;
-      modelId?: unknown;
-      displayName?: unknown;
-      contextWindow?: unknown;
-      inputModalities?: unknown;
-    };
-    if (model.provider !== provider || typeof model.modelId !== "string" || !model.modelId.trim()) {
-      return [];
-    }
-    const inputModalities = Array.isArray(model.inputModalities)
-      ? model.inputModalities.filter((m): m is string => typeof m === "string")
-      : undefined;
-    return [{
-      id: typeof model.id === "string" && model.id ? model.id : `local-${model.modelId}`,
-      modelId: model.modelId.trim(),
-      ...(typeof model.displayName === "string" && model.displayName.trim()
-        ? { displayName: model.displayName.trim() }
-        : {}),
-      ...(typeof model.contextWindow === "number" && model.contextWindow > 0
-        ? { contextWindow: Math.floor(model.contextWindow) }
-        : {}),
-      ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
-    }];
-  });
-}
-
-function parseContextWindow(raw: string): number | undefined {
-  const n = Number(raw.replace(/[_,\s]/g, ""));
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
-}
-
-export default function ProviderModels({
-  item,
-  apiBase,
-  availableModels,
-  hasLiveModels,
-  selectedModels,
-  modelsLoading = false,
-  modelsLoadFailed = false,
-  needsReauth = false,
-  onRetryModels,
-  onRefreshModels,
-  onOpenAccounts,
-}: {
+type ProviderModelsProps = {
   item: WorkspaceItem;
   apiBase: string;
   availableModels: string[];
-  selectedModels: string[];
-  /** Server-reported: did the last successful discovery return any rows? */
   hasLiveModels: boolean;
+  selectedModels: string[];
+  modelRows: ModelRow[] | null;
+  modelRevision: string;
+  modelRowsReady: boolean;
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
-  /** Active OAuth account needs a fresh login before live discovery works. */
   needsReauth?: boolean;
   onRetryModels?: () => void;
-  /**
-   * Force-refresh this provider's live catalog (clears server cache, re-fetches upstream,
-   * persists discovered ids into provider.models, then reloads the workspace model list).
-   * Distinct from onRetryModels which only re-reads the cached management payload.
-   */
-  onRefreshModels?: (result?: {
-    models: string[];
-    liveModelCount?: number;
-    persisted?: boolean;
-  }) => void | Promise<void>;
   onOpenAccounts?: () => void;
-}) {
+  onOpenModels: () => void;
+};
+
+export default function ProviderModels(props: ProviderModelsProps) {
+  return <ProviderModelInventory key={JSON.stringify([props.apiBase, props.item.name])} {...props} />;
+}
+
+function ProviderModelInventory({ item, apiBase, availableModels, selectedModels,
+  modelRows, modelRevision, modelRowsReady, modelsLoading = false, modelsLoadFailed = false,
+  needsReauth = false, onRetryModels, onOpenAccounts, onOpenModels,
+}: ProviderModelsProps) {
   const t = useT();
   const [query, setQuery] = useState("");
-  const [customModels, setCustomModels] = useState<CustomModelRow[]>([]);
-  const [customModelsReady, setCustomModelsReady] = useState(false);
-  const [customModelsLoadFailed, setCustomModelsLoadFailed] = useState(false);
-  const [customModelsLoadEpoch, setCustomModelsLoadEpoch] = useState(0);
-  const [customError, setCustomError] = useState("");
-  const [customSuccess, setCustomSuccess] = useState("");
-  const [customSaving, setCustomSaving] = useState(false);
-  const [refreshingModels, setRefreshingModels] = useState(false);
-  const [refreshNote, setRefreshNote] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<"add" | "edit">("add");
-  const [editId, setEditId] = useState("");
-  const [formModelId, setFormModelId] = useState("");
-  const [formDisplayName, setFormDisplayName] = useState("");
-  const [formContextWindow, setFormContextWindow] = useState("");
-  const [formShowCustomCtx, setFormShowCustomCtx] = useState(false);
-  const [formModalities, setFormModalities] = useState<string[]>(["text"]);
-  const [formError, setFormError] = useState("");
-
+  const [draft, setDraft] = useState("");
+  const [ownershipEpoch, setOwnershipEpoch] = useState(0);
+  const ownershipKey = JSON.stringify([apiBase, item.name, modelRevision, ownershipEpoch]);
+  const [ownership, setOwnership] = useState<{ key: string; rows: CustomModelRecord[] } | null>(null);
+  const [ownershipError, setOwnershipError] = useState<string | null>(null);
+  const [requestPending, setRequestPending] = useState(false);
+  const [mutation, setMutation] = useState<Mutation | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const copyResetRef = useRef<number | null>(null);
-  const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
-  const configuredModels = useMemo(() => item.models ?? [], [item.models]);
-  const customModelIds = useMemo(() => customModels.map(m => m.modelId), [customModels]);
-  const customById = useMemo(
-    () => new Map(customModels.map(m => [m.modelId, m] as const)),
-    [customModels],
-  );
+  const copyReset = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flight = useRef(false);
+  const active = useRef(true);
+  const currentRevision = useRef(modelRevision);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const recoveryRef = useRef<HTMLButtonElement>(null);
+  const focusIntent = useRef<{ button: HTMLButtonElement; retained: boolean } | null>(null);
+  const ownershipReady = ownership?.key === ownershipKey && ownershipError !== ownershipKey;
+  const ready = modelRows !== null && modelRowsReady && !modelsLoading && !modelsLoadFailed && ownershipReady;
+  const reconciled = ready && (!mutation || modelRevision !== mutation.revision);
+  const busy = requestPending || (!!mutation && !reconciled);
+  const rows = (modelRows ?? []).filter(row => row.provider === item.name);
+  const pendingSelection = rows.some(row => row.initialSelectionPending);
+  const actionsBlocked = !ready || busy || pendingSelection;
+  const customModels = ownership?.rows.filter(row => row.provider === item.name) ?? [];
+  const selectedSet = new Set(selectedModels);
+  // Full raw inputs retain duplicate/collision protection. Native-only DTO ids are not definitions.
+  const known = [...availableModels, ...(item.models ?? []), ...customModels.map(row => row.modelId), ...(item.defaultModel ? [item.defaultModel] : [])];
+  const modelId = draft.trim();
+  const duplicate = !!modelId && (known.includes(modelId) || encodedModelIdCollides(modelId, known));
+  const visible = rows.filter(row => !row.disabled);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = visible.filter(row => [row.id, row.namespaced].some(value => value.toLowerCase().includes(normalizedQuery)));
+  const labels = new Map<string, number>();
+  for (const row of visible) labels.set(row.id, (labels.get(row.id) ?? 0) + 1);
 
-  const models = useMemo(
-    () => filterModels(availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels),
-    [availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels],
-  );
-
+  useEffect(() => { currentRevision.current = modelRevision; }, [modelRevision]);
   useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/custom-models`);
-        if (!response.ok) throw new Error();
-        const rows: unknown = await response.json();
-        if (!active) return;
-        setCustomModels(parseCustomRows(rows, item.name));
-        setCustomModelsLoadFailed(false);
-        setCustomError("");
-        setCustomModelsReady(true);
-      } catch {
-        if (!active) return;
-        setCustomModels([]);
-        // Without this the component stays permanently unable to add a model: `customModelsReady`
-        // never flips back and the effect has no trigger left, so a single transient GET failure
-        // disabled Add until the whole panel remounted.
-        setCustomModelsReady(false);
-        setCustomModelsLoadFailed(true);
-        setCustomError(t("models.networkError"));
+    active.current = true;
+    const onFocus = (event: FocusEvent) => {
+      if (focusIntent.current && event.target !== focusIntent.current.button && event.target !== document.body) {
+        focusIntent.current.retained = false;
       }
     };
-    void load();
-    return () => { active = false; };
-  }, [apiBase, item.name, t, customModelsLoadEpoch]);
-
-  const retryCustomModels = () => {
-    setCustomModelsReady(false);
-    setCustomModelsLoadFailed(false);
-    setCustomError("");
-    setCustomModelsLoadEpoch(epoch => epoch + 1);
-  };
-
-  const canFetchLive = item.liveModels !== false && item.authMode !== "forward";
-
-  const refreshFromProvider = async () => {
-    if (refreshingModels || !canFetchLive) return;
-    setRefreshingModels(true);
-    setRefreshNote(null);
-    setCustomError("");
-    setCustomSuccess("");
-    try {
-      const response = await fetch(
-        `${apiBase}/api/providers/refresh-models?name=${encodeURIComponent(item.name)}`,
-        { method: "POST" },
-      );
-      const body: unknown = await response.json().catch(() => null);
-      const payload = body && typeof body === "object" ? body as {
-        ok?: unknown;
-        count?: unknown;
-        error?: unknown;
-        source?: unknown;
-        message?: unknown;
-        models?: unknown;
-        liveModelCount?: unknown;
-        persisted?: unknown;
-      } : null;
-      if (!response.ok) {
-        const err = payload && typeof payload.error === "string" ? payload.error : t("pws.refreshModelsFailed");
-        setRefreshNote({ ok: false, text: err });
-        return;
-      }
-      const count = typeof payload?.count === "number" ? payload.count : 0;
-      const models = Array.isArray(payload?.models)
-        ? payload.models.filter((id): id is string => typeof id === "string")
-        : [];
-      const liveModelCount = typeof payload?.liveModelCount === "number" ? payload.liveModelCount : undefined;
-      const persisted = payload?.persisted === true;
-      if (payload?.ok === false) {
-        const err = typeof payload.error === "string" ? payload.error : t("pws.refreshModelsFailed");
-        setRefreshNote({
-          ok: false,
-          text: count > 0
-            ? t("pws.refreshModelsPartial", { count: String(count), error: err })
-            : err,
-        });
-      } else if (payload?.source === "static") {
-        setRefreshNote({
-          ok: true,
-          text: typeof payload.message === "string" ? payload.message : t("pws.refreshModelsStatic"),
-        });
-      } else if (persisted) {
-        setRefreshNote({ ok: true, text: t("pws.refreshModelsSaved", { count: String(count) }) });
-      } else {
-        setRefreshNote({ ok: true, text: t("pws.refreshModelsOk", { count: String(count) }) });
-      }
-      // Paint chips from the response, then re-read selected-models / config so the list sticks.
-      await onRefreshModels?.({
-        models,
-        ...(liveModelCount !== undefined ? { liveModelCount } : {}),
-        ...(persisted ? { persisted: true } : {}),
-      });
-    } catch {
-      setRefreshNote({ ok: false, text: t("pws.refreshModelsFailed") });
-    } finally {
-      setRefreshingModels(false);
-    }
-  };
-
-  useEffect(() => () => {
-    if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
+    document.addEventListener("focusin", onFocus);
+    return () => {
+      active.current = false;
+      document.removeEventListener("focusin", onFocus);
+      if (copyReset.current !== null) clearTimeout(copyReset.current);
+    };
   }, []);
 
-  const copyModelId = async (modelId: string) => {
-    try {
-      await navigator.clipboard.writeText(modelId);
-      setCopiedId(modelId);
-      if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
-      copyResetRef.current = window.setTimeout(() => {
-        setCopiedId(prev => (prev === modelId ? null : prev));
-        copyResetRef.current = null;
-      }, 1200);
-    } catch {
-      /* ignore clipboard failures */
+  useEffect(() => {
+    let cancelled = false;
+    const bounded = createBoundedFetch(20_000);
+    void fetch(`${apiBase}/api/custom-models`, { signal: bounded.signal })
+      .then(readJsonOrThrow).then(parseCustomModelInventory)
+      .then(records => {
+        if (cancelled) return;
+        setOwnership({ key: ownershipKey, rows: records });
+        setOwnershipError(null);
+      }).catch(() => { if (!cancelled) setOwnershipError(ownershipKey); })
+      .finally(() => bounded.clear());
+    return () => { cancelled = true; bounded.controller.abort(); bounded.clear(); };
+  }, [apiBase, ownershipKey]);
+
+  useEffect(() => {
+    if (!requestPending && reconciled) flight.current = false;
+    const focus = focusIntent.current;
+    if (focus && !focus.button.isConnected) {
+      if (focus.retained && document.activeElement === document.body) (searchRef.current ?? recoveryRef.current)?.focus();
+      focusIntent.current = null;
     }
+  }, [requestPending, reconciled, modelRows]);
+
+  const retry = () => {
+    setOwnershipEpoch(epoch => epoch + 1);
+    onRetryModels?.();
   };
-
-  const openAddModal = () => {
-    setModalMode("add");
-    setEditId("");
-    setFormModelId("");
-    setFormDisplayName("");
-    setFormContextWindow("");
-    setFormShowCustomCtx(false);
-    setFormModalities(["text"]);
-    setFormError("");
-    setCustomSuccess("");
-    setModalOpen(true);
-  };
-
-  const openEditModal = (row: CustomModelRow) => {
-    setModalMode("edit");
-    setEditId(row.id);
-    setFormModelId(row.modelId);
-    setFormDisplayName(row.displayName ?? "");
-    setFormContextWindow(row.contextWindow ? String(row.contextWindow) : "");
-    setFormShowCustomCtx(
-      Boolean(row.contextWindow && !CONTEXT_PRESETS.some(p => p.value === String(row.contextWindow))),
-    );
-    setFormModalities(row.inputModalities?.length ? [...row.inputModalities] : ["text"]);
-    setFormError("");
-    setCustomSuccess("");
-    setModalOpen(true);
-  };
-
-  const trimmedFormModelId = formModelId.trim();
-  const editingCurrentId = modalMode === "edit"
-    ? customModels.find(m => m.id === editId)?.modelId
-    : undefined;
-  const knownModelIds = useMemo(() => [
-    ...availableModels,
-    ...customModelIds,
-    ...configuredModels,
-    ...(item.defaultModel ? [item.defaultModel] : []),
-  ], [availableModels, customModelIds, configuredModels, item.defaultModel]);
-
-  const formModelIdTaken = (() => {
-    if (!trimmedFormModelId) return false;
-    // Keep the current id editable; only block collisions with *other* models.
-    if (editingCurrentId && trimmedFormModelId === editingCurrentId) return false;
-    if (customModels.some(m => m.modelId === trimmedFormModelId && m.id !== editId)) return true;
-    if (availableModels.includes(trimmedFormModelId)) return true;
-    if (configuredModels.includes(trimmedFormModelId)) return true;
-    if (item.defaultModel === trimmedFormModelId) return true;
-    const others = knownModelIds.filter(id => id !== editingCurrentId);
-    if (encodedModelIdCollides(trimmedFormModelId, others)) return true;
-    return false;
-  })();
-
-  const formInvalid = !customModelsReady
-    || !trimmedFormModelId
-    || formModelIdTaken
-    || (modalMode === "edit" && !editId);
-
-  const saveCustomModel = async () => {
-    if (formInvalid || customSaving) return;
-    setCustomSaving(true);
-    setFormError("");
-    setCustomError("");
-    setCustomSuccess("");
-    const displayName = formDisplayName.trim();
-    const contextWindow = parseContextWindow(formContextWindow);
-    const inputModalities = formModalities.length > 0 ? formModalities : undefined;
+  const copyModel = async (row: ModelRow) => {
     try {
-      if (modalMode === "add") {
-        const response = await fetch(`${apiBase}/api/custom-models`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: item.name,
-            modelId: trimmedFormModelId,
-            ...(displayName ? { displayName } : {}),
-            ...(contextWindow ? { contextWindow } : {}),
-            ...(inputModalities ? { inputModalities } : {}),
-          }),
-        });
-        if (!response.ok) {
-          setFormError(t("models.customSaveFailed"));
-          return;
-        }
-        const created: unknown = await response.json().catch(() => null);
-        const createdRow = created && typeof created === "object"
-          ? parseCustomRows([{ ...created as object, provider: item.name }], item.name)[0]
-          : undefined;
-        setCustomModels(prev => {
-          if (prev.some(m => m.modelId === trimmedFormModelId)) return prev;
-          return [...prev, createdRow ?? {
-            id: `local-${trimmedFormModelId}`,
-            modelId: trimmedFormModelId,
-            ...(displayName ? { displayName } : {}),
-            ...(contextWindow ? { contextWindow } : {}),
-            ...(inputModalities ? { inputModalities } : {}),
-          }];
-        });
-        setModalOpen(false);
-        setCustomSuccess(t("models.customAdded"));
-        onRetryModels?.();
-      } else {
-        const response = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(editId)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            modelId: trimmedFormModelId,
-            displayName,
-            contextWindow: contextWindow ?? null,
-            inputModalities: formModalities,
-          }),
-        });
-        if (!response.ok) {
-          setFormError(t("models.customSaveFailed"));
-          return;
-        }
-        const updated: unknown = await response.json().catch(() => null);
-        const updatedRow = updated && typeof updated === "object"
-          ? parseCustomRows([{ ...updated as object, provider: item.name }], item.name)[0]
-          : undefined;
-        setCustomModels(prev => prev.map(m => {
-          if (m.id !== editId) return m;
-          return updatedRow ?? {
-            id: m.id,
-            modelId: trimmedFormModelId,
-            ...(displayName ? { displayName } : {}),
-            ...(contextWindow ? { contextWindow } : {}),
-            ...(inputModalities ? { inputModalities } : {}),
-          };
-        }));
-        setModalOpen(false);
-        setCustomSuccess(t("models.customUpdated"));
-        onRetryModels?.();
-      }
-    } catch {
-      setFormError(t("models.networkError"));
-    } finally {
-      setCustomSaving(false);
-    }
+      await navigator.clipboard.writeText((labels.get(row.id) ?? 0) > 1 ? row.namespaced : row.id);
+      if (!active.current) return;
+      setCopiedId(row.namespaced);
+      if (copyReset.current !== null) clearTimeout(copyReset.current);
+      copyReset.current = setTimeout(() => setCopiedId(null), 1200);
+    } catch { /* Clipboard availability does not affect inventory authority. */ }
+  };
+  const owns = (row: ModelRow) => row.custom === true && row.native !== true && customModels.some(custom =>
+    custom.id === row.customId && custom.provider === row.provider && custom.modelId === row.id);
+  const actionFor = (row: ModelRow): "delete" | "hide" | null => {
+    if (!ready || row.initialSelectionPending) return null;
+    if (row.custom) return owns(row) ? "delete" : null;
+    // A new stored override with an old DTO is not authority to hide the old representation.
+    if (row.native !== true && customModels.some(custom => custom.modelId === row.id)) return null;
+    return "hide";
+  };
+  const finish = (result: Omit<Mutation, "revision">) => {
+    // A completed write still invalidates the parent if its provider tab was closed meanwhile.
+    if (!active.current) { onRetryModels?.(); return; }
+    // Reconciliation must observe a revision started AFTER the response, not a concurrent old read.
+    setMutation({ ...result, revision: currentRevision.current });
+    setRequestPending(false);
+    retry();
   };
 
-  const deleteCustomModel = async (row: CustomModelRow) => {
-    if (!window.confirm(t("models.customDeleteConfirm", { name: row.displayName ?? row.modelId }))) {
-      return;
-    }
-    setCustomError("");
-    setCustomSuccess("");
+  const addCustomModel = async () => {
+    if (actionsBlocked || flight.current || !modelId || duplicate) return;
+    flight.current = true;
+    setRequestPending(true);
+    setMutation(null);
+    const bounded = createBoundedFetch(60_000);
+    let result: Omit<Mutation, "revision"> = { outcome: "unconfirmed", refreshPending: false };
     try {
-      const response = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(row.id)}`, {
-        method: "DELETE",
+      const response = await fetch(`${apiBase}/api/custom-models`, {
+        method: "POST", signal: bounded.signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: item.name, modelId }),
       });
-      if (!response.ok) {
-        setCustomError(t("models.customSaveFailed"));
-        return;
+      if (response.status === 201) {
+        const body = await readJsonOrThrow(response);
+        const created = parseCustomModelCreated(body, item.name, modelId);
+        if (ownership?.rows.some(row => row.id === created.id)) throw new Error("Reused custom identity");
+        result = { outcome: "saved", created, refreshPending: catalogRefreshPending(body) };
+        if (active.current) setDraft("");
+      } else if (response.status >= 400 && response.status < 500) {
+        result = { outcome: "rejected", refreshPending: false };
       }
-      setCustomModels(prev => prev.filter(m => m.id !== row.id));
-      setCustomSuccess(t("models.customDeleted"));
-      onRetryModels?.();
-    } catch {
-      setCustomError(t("models.networkError"));
-    }
+    } catch { /* Transport/invalid acknowledgement cannot prove a rollback. */ }
+    finally { bounded.clear(); finish(result); }
   };
 
-  const emptyBase = availableModels.length === 0
-    && configuredModels.length === 0
-    && customModelIds.length === 0
-    && !item.defaultModel;
-  const showingConfiguredFallback = availableModels.length === 0 && configuredModels.length > 0;
-  // Aggregators (OpenRouter etc.) can return thousands of ids; capping the mounted
-  // chips keeps the tab responsive. Filtering narrows the list, so the cap only
-  // bites on the unfiltered full catalog.
-  const CHIP_RENDER_CAP = 300;
-  const capped = models.length > CHIP_RENDER_CAP;
-  const visibleModels = capped ? models.slice(0, CHIP_RENDER_CAP) : models;
+  const removeModel = async (row: ModelRow, button: HTMLButtonElement) => {
+    const action = actionFor(row);
+    if (actionsBlocked || flight.current || !action) return;
+    if (!window.confirm(t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }))) return;
+    flight.current = true;
+    setRequestPending(true);
+    setMutation(null);
+    focusIntent.current = { button, retained: document.activeElement === button };
+    const bounded = createBoundedFetch(60_000);
+    let result: Omit<Mutation, "revision"> = { outcome: "unconfirmed", refreshPending: false };
+    try {
+      const response = action === "delete"
+        ? await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(row.customId!)}`, { method: "DELETE", signal: bounded.signal })
+        : await putModelVisibility(apiBase, "models", row.provider, [{ id: row.id, native: row.native === true }], false,
+          (input, init) => fetch(input, { ...init, signal: bounded.signal }));
+      if (response.ok) {
+        const body = await readJsonOrThrow<unknown>(response);
+        if (body && typeof body === "object" && !Array.isArray(body) && "ok" in body && body.ok === true) {
+          result = { outcome: action === "delete" ? "deleted" : "hidden", refreshPending: catalogRefreshPending(body) };
+        }
+      } else if (response.status >= 400 && response.status < 500) {
+        result = { outcome: "rejected", refreshPending: false };
+      }
+    } catch { /* Re-read both resources even when the write acknowledgement was lost. */ }
+    finally { bounded.clear(); finish(result); }
+  };
+
+  const savedHidden = mutation?.created && reconciled && rows.some(row => row.customId === mutation.created?.id && row.disabled);
+  const refreshFailed = mutation && (mutation.refreshPending || modelsLoadFailed || ownershipError === ownershipKey);
+  const feedback = !mutation ? null
+    : mutation.outcome === "unconfirmed" ? t("pws.modelMutationUnconfirmed")
+    : mutation.outcome === "rejected" ? t("models.customSaveFailed")
+    : mutation.outcome === "saved" ? t(refreshFailed ? "pws.modelSavedRefreshPending" : savedHidden ? "pws.modelSavedHidden" : "pws.modelSaved")
+    : refreshFailed ? t("pws.modelRemovedRefreshPending")
+    : t(mutation.outcome === "deleted" ? "pws.modelDefinitionDeleted" : "pws.modelHidden");
 
   return (
     <div className="pws-section">
       <div className="pws-section-head">
         <h3 className="pws-section-title">{t("pws.tab.models")}</h3>
-        <div className="row" style={{ gap: 8, alignItems: "center" }}>
-          {models.length > 0 && (
-            <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
-          )}
-          {customModels.length > 0 && (
-            <span className="muted text-label">{t("models.customSummary", { count: customModels.length })}</span>
-          )}
-          {canFetchLive && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => { void refreshFromProvider(); }}
-              disabled={refreshingModels || modelsLoading || needsReauth}
-              aria-label={t("pws.refreshModels")}
-              title={needsReauth ? t("pws.modelsNeedsReauth") : t("pws.refreshModelsDesc")}
-            >
-              <IconRefresh width={14} />
-              {refreshingModels ? t("pws.refreshingModels") : t("pws.refreshModels")}
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={openAddModal}
-            disabled={!customModelsReady || customSaving}
-            aria-label={t("models.customAdd")}
-            aria-haspopup="dialog"
-          >
-            {t("models.customAddBtn")}
-          </button>
-        </div>
+        {modelRows !== null && <span className="muted">{t("pws.modelsAvailable", { count: visible.length })}</span>}
       </div>
-      {refreshNote && (
-        <p className={refreshNote.ok ? "muted text-label" : "pws-inline-error"} role="status">
-          {refreshNote.text}
-        </p>
-      )}
-      {needsReauth && (
-        <div className="pws-inline-error" role="status">
-          <span>{t("pws.modelsNeedsReauth")}</span>
-          {onOpenAccounts && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenAccounts}>
-              {t("pws.tab.accounts")}
-            </button>
-          )}
-        </div>
-      )}
-      {showingConfiguredFallback && !needsReauth && (
-        <p className="muted text-label" style={{ marginBottom: 10 }}>{t("pws.modelsConfiguredFallback")}</p>
-      )}
-      {customSuccess && <p className="muted text-label" role="status">{customSuccess}</p>}
-      {customError && (
-        <p className="pws-inline-error" role="alert">
-          {customError}
-          {customModelsLoadFailed && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={retryCustomModels} style={{ marginLeft: 8 }}>
-              {t("common.retry")}
-            </button>
-          )}
-        </p>
-      )}
-      {!emptyBase && (
-        <input
-          type="search"
-          className="input pws-model-search"
-          placeholder={t("pws.modelSearchPlaceholder")}
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          aria-label={t("pws.modelSearchPlaceholder")}
-        />
-      )}
-      {modelsLoading && emptyBase ? (
-        <p className="muted" role="status">{t("pws.modelsLoading")}</p>
-      ) : modelsLoadFailed && emptyBase ? (
-        <div role="alert" className="pws-inline-error">
-          <span>{t("pws.modelsLoadFailed")}</span>
-          {onRetryModels && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onRetryModels}>
-              {t("pws.retry")}
-            </button>
-          )}
-        </div>
-      ) : emptyBase ? (
-        <p className="muted">{t("pws.noModels")}</p>
-      ) : models.length === 0 ? (
-        <p className="muted" role="status">{t("pws.noModelMatch")}</p>
-      ) : (
-        <ul className="pws-model-list">
-          {visibleModels.map(modelId => {
-            const isDefault = modelId === item.defaultModel;
-            const isSelected = selectedSet.has(modelId);
-            const custom = customById.get(modelId);
-            const copied = copiedId === modelId;
-            return (
-              <li key={modelId} className="pws-model-chip">
-                <button
-                  type="button"
-                  className="pws-model-chip-main"
-                  onClick={() => { void copyModelId(modelId); }}
-                  title={custom?.displayName ? `${modelId} (${custom.displayName})` : modelId}
-                  aria-label={copied ? t("pws.modelCopied") : t("pws.copyModelId")}
-                >
-                  <span className="pws-model-id">{modelId}</span>
-                </button>
-                {custom ? <span className="badge badge-muted pws-model-flag">{t("models.customBadge")}</span> : null}
-                {isDefault ? <span className="badge badge-muted pws-model-flag">{t("prov.defaultBadge")}</span> : null}
-                {isSelected ? <span className="badge badge-accent pws-model-flag">{t("pws.selected")}</span> : null}
-                {custom && (
-                  <span className="pws-model-chip-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm text-caption"
-                      onClick={() => openEditModal(custom)}
-                      disabled={customSaving || !customModelsReady}
-                    >
-                      {t("models.customEdit")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm text-caption"
-                      style={{ color: "var(--red)" }}
-                      onClick={() => { void deleteCustomModel(custom); }}
-                      disabled={customSaving || !customModelsReady}
-                    >
-                      {t("models.customDelete")}
-                    </button>
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {capped && (
-        <p className="muted text-label" style={{ marginTop: 10 }}>
-          {t("pws.modelsTruncated", { shown: String(CHIP_RENDER_CAP), total: String(models.length) })}
-        </p>
-      )}
-
-      {modalOpen && (
-        <div
-          className="modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label={modalMode === "add" ? t("models.customAdd") : t("models.customEdit")}
-          onClick={() => { if (!customSaving) setModalOpen(false); }}
-          onKeyDown={e => {
-            if (e.key === "Escape" && !customSaving) setModalOpen(false);
-          }}
-        >
-          <div className="modal-card" onClick={e => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3>
-                {modalMode === "add"
-                  ? t("models.customAddTitle", { provider: item.name })
-                  : t("models.customEditTitle", { provider: item.name })}
-              </h3>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setModalOpen(false)}
-                disabled={customSaving}
-                aria-label={t("common.close")}
-              >
-                &times;
-              </button>
-            </div>
-
-            {formError && <Notice tone="err">{formError}</Notice>}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {t("models.customFieldModelId")}
-                <input
-                  className="input"
-                  value={formModelId}
-                  onChange={e => setFormModelId(e.target.value)}
-                  disabled={customSaving}
-                  placeholder={t("models.customFieldModelIdPlaceholder")}
-                  aria-label={t("models.customAdd")}
-                  autoFocus
-                />
-              </label>
-
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {t("models.customFieldDisplayName")}
-                <input
-                  className="input"
-                  value={formDisplayName}
-                  onChange={e => setFormDisplayName(e.target.value)}
-                  disabled={customSaving}
-                  placeholder={t("models.customFieldDisplayNamePlaceholder")}
-                />
-              </label>
-
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {t("models.customFieldContext")}
-                <div className="row" style={{ gap: 6 }}>
-                  <Select
-                    value={formShowCustomCtx ? CUSTOM_OPTION : formContextWindow}
-                    options={[
-                      { value: "", label: "—" },
-                      ...CONTEXT_PRESETS.map(p => ({ value: p.value, label: p.label })),
-                      { value: CUSTOM_OPTION, label: t("models.custom") },
-                    ]}
-                    onChange={v => {
-                      if (v === CUSTOM_OPTION) {
-                        setFormShowCustomCtx(true);
-                        return;
-                      }
-                      setFormShowCustomCtx(false);
-                      setFormContextWindow(v);
-                    }}
-                    disabled={customSaving}
-                    label={t("models.customFieldContext")}
-                  />
-                  {formShowCustomCtx && (
-                    <input
-                      className="input"
-                      style={{ width: 120 }}
-                      inputMode="numeric"
-                      value={formContextWindow}
-                      onChange={e => setFormContextWindow(e.target.value)}
-                      disabled={customSaving}
-                      placeholder={t("models.customPlaceholder")}
-                      aria-label={t("models.customFieldContext")}
-                    />
-                  )}
-                </div>
-              </label>
-
-              <div className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {t("models.customFieldModalities")}
-                <div className="row" style={{ gap: 8 }}>
-                  {(["text", "image", "audio"] as const).map(mod => (
-                    <label key={mod} className="row" style={{ gap: 4, cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={formModalities.includes(mod)}
-                        onChange={e => {
-                          setFormModalities(prev => (
-                            e.target.checked ? [...prev, mod] : prev.filter(m => m !== mod)
-                          ));
-                        }}
-                        disabled={customSaving}
-                      />
-                      <span className="text-control">{mod}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setModalOpen(false)}
-                disabled={customSaving}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={customSaving || formInvalid}
-                onClick={() => { void saveCustomModel(); }}
-              >
-                {customSaving
-                  ? t("models.customSaving")
-                  : (modalMode === "add" ? t("models.customAddBtn") : t("models.customEditBtn"))}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <div className="row">
+        <button ref={recoveryRef} type="button" className="btn btn-ghost btn-sm" onClick={onOpenModels}>{t("pws.manageModelVisibility")}</button>
+      </div>
+      {needsReauth && <div className="pws-inline-error" role="status">
+        <span>{t("pws.modelsNeedsReauth")}</span>
+        {onOpenAccounts && <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenAccounts}>{t("pws.tab.accounts")}</button>}
+      </div>}
+      {modelRowsReady && availableModels.length === 0 && visible.length > 0 && (item.models?.length ?? 0) > 0 && !needsReauth &&
+        <p className="muted text-label">{t("pws.modelsConfiguredFallback")}</p>}
+      {pendingSelection && <p role="status" className="muted">{t("pws.modelSelectionPending")}</p>}
+      <label className="text-label pws-custom-model-label" htmlFor={`pws-custom-model-${item.name}`}>{t("models.customAdd")}</label>
+      <div className="row pws-custom-model-row">
+        <input id={`pws-custom-model-${item.name}`} className="input" value={draft}
+          onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void addCustomModel(); }}
+          placeholder={t("models.customFieldModelIdPlaceholder")} aria-label={t("models.customAdd")} disabled={requestPending} />
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => { void addCustomModel(); }}
+          disabled={actionsBlocked || !modelId || duplicate}>{requestPending ? t("models.customSaving") : t("models.customAddBtn")}</button>
+      </div>
+      {duplicate && <p className="muted text-label" role="status">{t("pws.modelKnown")}</p>}
+      {feedback && <p className={mutation?.outcome === "unconfirmed" || mutation?.outcome === "rejected" ? "pws-inline-error" : "muted text-label"}
+        role={mutation?.outcome === "unconfirmed" || mutation?.outcome === "rejected" ? "alert" : "status"}>{feedback}</p>}
+      {savedHidden && refreshFailed && <p className="muted text-label" role="status">{t("pws.modelSavedHidden")}</p>}
+      {mutation?.refreshPending && <p className="muted text-label" role="status">{t("codexAuth.catalogRefreshPending")}</p>}
+      {(modelsLoadFailed || ownershipError === ownershipKey) ? <div className="pws-inline-error" role="alert">
+        <span>{t(modelsLoadFailed ? "pws.modelsLoadFailed" : "pws.modelOwnershipFailed")}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={retry} disabled={requestPending}>{t("common.retry")}</button>
+      </div> : (!ready || busy) && <p className="muted" role="status">{t(!modelRowsReady || modelsLoading ? "pws.modelsLoading" : "pws.modelOwnershipLoading")}</p>}
+      {mutation && (mutation.outcome === "unconfirmed" || mutation.refreshPending) && !modelsLoadFailed && ownershipError !== ownershipKey &&
+        <button type="button" className="btn btn-ghost btn-sm" onClick={retry} disabled={requestPending}>{t("common.retry")}</button>}
+      <input ref={searchRef} type="search" className="input pws-model-search" placeholder={t("pws.modelSearchPlaceholder")}
+        value={query} onChange={event => setQuery(event.target.value)} aria-label={t("pws.modelSearchPlaceholder")} />
+      {modelRows !== null && visible.length === 0 ? <p className="muted">{t("pws.noModels")}</p>
+        : filtered.length === 0 && modelRows !== null ? <p className="muted" role="status">{t("pws.noModelMatch")}</p>
+        : <ul className="pws-model-list">{filtered.slice(0, CHIP_RENDER_CAP).map(row => <ProviderModelChip key={row.namespaced}
+          row={row} disambiguate={(labels.get(row.id) ?? 0) > 1} copied={copiedId === row.namespaced}
+          isDefault={row.id === item.defaultModel} selected={row.native !== true && selectedSet.has(row.id)}
+          action={actionFor(row)} disabled={actionsBlocked} onCopy={() => { void copyModel(row); }}
+          onRemove={button => { void removeModel(row, button); }} />)}</ul>}
+      {filtered.length > CHIP_RENDER_CAP && <p className="muted text-label" style={{ marginTop: 10 }}>
+        {t("pws.modelsTruncated", { shown: String(CHIP_RENDER_CAP), total: String(filtered.length) })}
+      </p>}
     </div>
   );
 }

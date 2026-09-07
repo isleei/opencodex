@@ -173,6 +173,13 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "pi.title",
   "pi.modelsFile",
   "clients.col.baseUrl",
+  "pws.clientIdentity.codex",
+  "pws.clientIdentity.claudeCode",
+  "pws.clientIdentity.grok",
+  "pws.clientIdentity.agy",
+  "workflows.templates.api",
+  "subscriptions.agy.quota.gemini",
+  "subscriptions.agy.quota.claudeGpt",
 
   // Pure model-ref syntax — the technical grammar is the rendering in every locale.
   "workflows.editor.defaultsPlaceholder",
