@@ -216,6 +216,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| [BigModel Coding Plan — Responses (정적 모델 목록)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan(기본): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 종량제: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 또는 사용자 지정 |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -328,7 +329,7 @@ provider 전체 parallel tool call이나 OpenAI `reasoning_effort`를 광고하�
 > 안내합니다. 일반 API 자동화, 사용자 애플리케이션 백엔드 및 비대화형 일괄 호출은 금지되며
 > 플랜 키가 정지될 수 있습니다.
 
-> **GLM 경로는 두 개입니다:** `zai`는 Z.AI 국제 코딩 플랜 구독이고, `zhipu-bigmodel`은
+> **GLM 과금 경로:** `zai`는 Z.AI 국제 코딩 플랜 구독이고, `zhipu-bigmodel`은
 > Zhipu의 중국 내수 BigModel 종량제 엔드포인트입니다. 호스트도 키도 과금도 다르며, 한쪽에서
 > 발급한 키는 다른 쪽에서 인증되지 않습니다.
 

@@ -230,7 +230,7 @@ import {
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
-import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
+import { hasPassiveAccountQuota, recordAnthropicAccountQuotaFromHeaders, recordPassiveAccountQuota } from "../../providers/quota";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -374,6 +374,7 @@ import {
   type UpstreamHostAdmissionLease,
 } from "../../codex/upstream-host-health";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { createGrokResponsesControlFrameBlockRewrite } from "../grok-responses-control-frame";
 import {
   createResponsesSnapshotBlockRewrite,
   hasResponsesSnapshotRepair,
@@ -3946,7 +3947,27 @@ async function handleResponsesInner(
       for (let attempt = 0; attempt < 3; attempt++) {
         if (selectionIsCurrent(requestBindings.get(wireRequest))) {
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
-          return fetchImpl(destination, dispatchInit);
+          const binding = requestBindings.get(wireRequest);
+          const snapshot = route.providerName === "anthropic" && anthropicPoolAccountId && binding?.kind === "oauth"
+            ? binding.snapshot : undefined;
+          const writerGeneration = snapshot ? captureConfigGeneration() : 0;
+          const sentHeaders = snapshot ? new Headers(dispatchInit.headers) : undefined;
+          const ownsBearer = snapshot !== undefined
+            && sentHeaders?.get("authorization") === `Bearer ${snapshot.accessToken}`
+            && !sentHeaders?.has("x-api-key");
+          const response = await fetchImpl(destination, dispatchInit);
+          // Observe each physical response before retries replace it. The binding belongs to
+          // this dispatch, so a manual switch cannot file A's headers against B. Header
+          // overrides and credential replacement make ownership unprovable: skip those writes.
+          if (ownsBearer && snapshot) {
+            try {
+              const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
+              if (current && !current.needsReauth && credentialGeneration(current.credential) === snapshot.generation) {
+                recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration);
+              }
+            } catch { /* best-effort observation cannot fail the response */ }
+          }
+          return response;
         }
         const nextAdapter = await refreshDispatchAdapter(requestParsed);
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
@@ -5494,9 +5515,9 @@ async function handleResponsesInner(
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams
       // may instead carry the complete items in output_item.done, so the
-      // explicit Grok compatibility marker enables strict terminal-only repair.
+      // explicit Grok compatibility marker enables strict client compatibility rewrites.
       // The provider's broader snapshot/lifecycle repair remains opt-in.
-      const grokClientSnapshotRepairEnabled = logCtx.surface === "grok";
+      const grokClientCompatibilityEnabled = logCtx.surface === "grok";
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
       const githubCopilotRepairEnabled = route.providerName === "github-copilot";
       const responseModelRewrite = parsed._responseModelId !== undefined
@@ -5545,7 +5566,10 @@ async function handleResponsesInner(
         githubCopilotRepairEnabled
           ? createGithubCopilotResponsesBlockRewrite(translatorBudget)
           : undefined,
-        grokClientSnapshotRepairEnabled
+        grokClientCompatibilityEnabled
+          ? createGrokResponsesControlFrameBlockRewrite()
+          : undefined,
+        grokClientCompatibilityEnabled
           ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)
           : undefined,
         snapshotRepairEnabled
@@ -5956,7 +5980,10 @@ async function handleResponsesInner(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  const rotateSidecarProviderOn429 = async (retryAfter: string | null): Promise<ProviderAdapter | null> => {
+  const rotateSidecarProviderOn429 = async (
+    retryAfter: string | null,
+    responseHeaders?: Headers,
+  ): Promise<ProviderAdapter | null> => {
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -6000,6 +6027,8 @@ async function handleResponsesInner(
         anthropicPoolAccountId,
         retryAfter,
         anthropicSessionKey,
+        Date.now(),
+        responseHeaders,
       );
       if (!nextAccountId) return null;
       try {
@@ -7032,6 +7061,8 @@ async function handleResponsesInner(
           anthropicPoolAccountId,
           upstreamResponse.headers.get("retry-after"),
           anthropicSessionKey,
+          Date.now(),
+          upstreamResponse.headers,
         );
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -7445,6 +7476,8 @@ async function handleResponsesInner(
           anthropicPoolAccountId,
           response.headers.get("retry-after"),
           anthropicSessionKey,
+          Date.now(),
+          response.headers,
         );
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }

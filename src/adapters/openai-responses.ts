@@ -631,6 +631,13 @@ function mapRoutedResponsesReasoningEffort(
   if (provider.authMode === "forward") return body;
   if (configuredReasoningEfforts(provider, modelId) === undefined) return body;
   if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return body;
+  const declaredEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
+  // An explicitly empty ladder means no effort control, not no reasoning output.
+  // Omit only effort so the upstream default applies; unknown/non-rankable ladders stay untouched.
+  if (declaredEfforts?.length === 0 && Object.hasOwn(body.reasoning, "effort")) {
+    const { effort: _effort, ...reasoning } = body.reasoning;
+    return { ...body, reasoning: Object.keys(reasoning).length > 0 ? reasoning : undefined };
+  }
   const requested = body.reasoning.effort;
   if (typeof requested !== "string") return body;
 

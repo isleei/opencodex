@@ -229,6 +229,7 @@ opencodex поставляется с 79 встроенными пресетам
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| [BigModel Coding Plan — Responses (статический список)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (по умолчанию): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · или Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -367,7 +368,7 @@ plan. Ключ создаётся в [дашборде Featherless](https://feat
 > в интерактивных инструментах программирования. Автоматизация общего API, серверы пользовательских
 > приложений и неинтерактивные пакетные вызовы запрещены и могут привести к блокировке ключа плана.
 
-> **Два маршрута GLM:** `zai` — это международная подписка Z.AI на coding-план, а `zhipu-bigmodel` —
+> **Тарификация GLM:** `zai` — это международная подписка Z.AI на coding-план, а `zhipu-bigmodel` —
 > внутренняя китайская конечная точка BigModel с оплатой по факту использования. Разные хосты,
 > разные ключи, разная тарификация: ключ от одного сервиса не подойдёт к другому.
 

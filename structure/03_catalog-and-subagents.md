@@ -145,6 +145,18 @@ then trusted catalog metadata such as a configured qualified provider/model alia
 This overlay never changes route identity or the upstream wire model, and its catalog fingerprint makes
 a label edit refresh Codex output.
 
+Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
+and convergence pass the same map to the observed-state merge. After native normalization and
+ordering, the merge applies the exact nonblank trimmed label and saves
+`opencodex_native_display_name: { slug, original, applied }` in the local catalog only. The next
+merge detaches its inputs, removes that marker, and restores `original` only if the native slug
+still matches and the current name equals `applied`. Removing or blanking the override therefore
+restores the owned name before normal native metadata upgrades. Divergent external names remain
+subject to those upgrades: Astra still replaces non-pinned names with its pinned native name.
+Template-derived rows discard the marker. The overlay leaves model IDs, metadata (including
+capabilities), ordering, routed combo aliases, custom rows and account-qualified rows unchanged;
+it does not relabel HTTP model listings or virtual `*-pro` rows.
+
 ## Native passthrough
 
 Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,

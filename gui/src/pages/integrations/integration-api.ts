@@ -15,6 +15,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "prime",
   "cline",
   "aside",
+  "raycast",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -26,6 +27,7 @@ export type IntegrationReason =
   | "foreign-edit"
   | "unowned-key"
   | "blocked-container"
+  | "ambiguous-selector"
   | "unresolvable-path";
 
 export type IntegrationRefusalReason =
@@ -36,6 +38,19 @@ export type IntegrationRefusalReason =
   | "drift_requires_confirm"
   | "snapshot_expired"
   | "write_failed";
+
+export type RaycastPlan = "pro" | "free" | "unknown";
+
+/**
+ * Raycast's app-side facts, sent only on `/api/client-integrations/raycast`.
+ * Custom Providers is a Pro feature, so a `current` file can still be one
+ * Raycast ignores — this is what lets the page say so instead of showing green.
+ */
+export interface RaycastInstall {
+  plan: RaycastPlan;
+  appPath: string | null;
+  aiDirPresent: boolean;
+}
 
 export interface IntegrationStatus {
   clientId: FileIntegrationClientId;
@@ -50,6 +65,7 @@ export interface IntegrationStatus {
   /** Aside's explicit account-backed profile scope and desired sync state. */
   profileId?: number;
   enabled?: boolean;
+  raycast?: RaycastInstall;
 }
 
 export interface IntegrationStateListEnvelope {

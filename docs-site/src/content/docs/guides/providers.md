@@ -367,6 +367,7 @@ free-experimentation model.
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -582,9 +583,43 @@ negative, or internally inconsistent billing totals produce no report rather tha
 > interactive coding tools only. General API automation, custom application backends, and
 > non-interactive batch use are prohibited and may cause the plan key to be suspended.
 
-> **Two GLM routes:** `zai` is the Z.AI international coding-plan subscription; `zhipu-bigmodel`
+> **GLM billing routes:** `zai` is the Z.AI international coding-plan subscription; `zhipu-bigmodel`
 > is Zhipu's domestic BigModel pay-as-you-go endpoint. Different hosts, different keys, different
 > billing — a key issued for one will not authenticate against the other.
+
+### BigModel Coding Plan over Responses
+
+Select **Zhipu AI — BigModel Coding Plan (Responses)** (`zhipu-bigmodel-responses`)
+for the `openai-responses` endpoint `https://open.bigmodel.cn/api/v1`. This is separate
+from `zhipu-bigmodel-coding`, which uses Chat Completions at `/api/coding/paas/v4`.
+
+The preset uses a **static roster** (`liveModels: false`) taken from the
+[official BigModel Codex example](https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md):
+
+| Model | Context tokens | Upstream selectable effort | Default effort | Reasoning summaries |
+| --- | ---: | --- | --- | --- |
+| `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
+| `glm-5-turbo` | 204,800 | None (empty list) | `max` | Supported |
+
+Both entries declare upstream text-only input. The Codex catalog advertises text and
+image because opencodex's existing vision sidecar can describe images for text-only
+models. Image handling requires an available, enabled vision sidecar; this does not
+declare native BigModel image support.
+
+The default model is `glm-5.3`; Responses reasoning content is preserved on replay.
+The existing Codex export adds its compatibility
+`ultra` tier to GLM-5.3 and omits Turbo's default-effort field because Turbo has no
+selectable ladder; the provider metadata still records `max` for both models.
+For Turbo, outgoing Responses requests omit `reasoning.effort`, including a caller's
+`max` or `ultra`, while preserving requested reasoning summaries. This leaves effort
+selection to the upstream default; opencodex does not inject a selectable or wire `max`.
+
+The example's `models.json` is a local catalog file, not a documented HTTP model-list
+response. This preset does not perform live model discovery. `glm-5.3-flash` is not
+seeded here because its exact Responses metadata is not verified. An existing custom
+provider with the same name keeps its configured destination and metadata.
+CLI key login also skips the undocumented `/models` probe and reports validation as
+unknown; successful key authentication is established by a subsequent inference request.
 
 ### Multiple API keys
 

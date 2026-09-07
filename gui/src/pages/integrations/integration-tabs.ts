@@ -47,6 +47,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: "prime", hash: "integrations/prime", labelKey: "integrations.tab.prime" },
   { id: "cline", hash: "integrations/cline", labelKey: "integrations.tab.cline" },
   { id: "aside", hash: "integrations/aside", labelKey: "integrations.tab.aside" },
+  { id: "raycast", hash: "integrations/raycast", labelKey: "integrations.tab.raycast" },
 ] as const;
 
 export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
@@ -63,4 +64,5 @@ export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
   "prime",
   "cline",
   "aside",
+  "raycast",
 ]);

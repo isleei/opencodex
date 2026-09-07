@@ -8,6 +8,7 @@ import { markFor } from "../../components/integration-marks";
 import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
+import RaycastPlanNotice from "./RaycastPlanNotice";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
 import {
@@ -58,6 +59,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   prime: "integrations.semantics.prime",
   cline: "integrations.semantics.cline",
   aside: "integrations.semantics.aside",
+  raycast: "integrations.semantics.raycast",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -74,6 +76,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   prime: "integrations.tab.prime",
   cline: "integrations.tab.cline",
   aside: "integrations.tab.aside",
+  raycast: "integrations.tab.raycast",
 };
 
 export default function FileIntegrationPage({
@@ -263,6 +266,8 @@ export default function FileIntegrationPage({
 
       <p className="page-sub">{t(SEMANTICS_KEY[client])}</p>
       <p className="integration-path">{status.configPath}</p>
+      {/* Only the raycast envelope carries this; the guard is the field, not the id. */}
+      {status.raycast && <RaycastPlanNotice install={status.raycast} />}
 
       {status.appliedAt && (
         <p className="integration-meta">

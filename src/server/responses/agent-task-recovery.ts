@@ -1,14 +1,16 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { decodeJwtPayload, extractAccountId } from "../../oauth/chatgpt";
 import type { OcxConfig } from "../../types";
-import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { boundedBodyDecodeFailure, readBoundedResponseBody } from "../../lib/bounded-body";
 import { isApiAuthRequired, isProxyAdmissionSecret } from "../auth-cors";
 import { structurallyValidFernetTokens } from "./encrypted-payload";
 import {
   cachedAgentTaskRecovery,
   discardCachedAgentTaskRecovery,
   resetAgentTaskRecoveryCache,
-  resolveCachedAgentTaskRecovery,
+  resolveCachedAgentTaskRecoveryWithResult,
+  type AgentTaskRecoveryResolution,
+  type AgentTaskRecoveryResolutionFailureReason,
 } from "./agent-task-recovery-cache";
 
 /** Experimental opt-in normalization through ChatGPT's fixed Codex endpoint. */
@@ -44,9 +46,8 @@ export interface AgentTaskRecoveryOptions {
 export type AgentTaskRecoveryFailureReason =
   | "unsupported_envelope"
   | "admission_denied"
-  // Includes cache capacity rejection; does not imply an upstream request was attempted.
-  | "recovery_unavailable"
-  | "caller_cancelled"
+  // recovery_unavailable includes capacity rejection, which does not imply an upstream attempt.
+  | AgentTaskRecoveryResolutionFailureReason
   | "input_changed";
 
 export type AgentTaskRecoveryResult =
@@ -436,7 +437,7 @@ async function requestRecovery(
   envelope: AgentEnvelope,
   options: AgentTaskRecoveryOptions,
   abortSignal?: AbortSignal,
-): Promise<string | null> {
+): Promise<AgentTaskRecoveryResolution> {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(new DOMException("Agent task recovery timed out", "TimeoutError")),
@@ -454,8 +455,11 @@ async function requestRecovery(
       redirect: "error",
     });
     if (!response.ok) {
-      try { await response.body?.cancel(); } catch { /* already closed */ }
-      return null;
+      // A rejected or never-settling cancellation must not extend the recovery deadline.
+      try { void response.body?.cancel().catch(() => undefined); } catch { /* already closed */ }
+      if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
+      if (controller.signal.aborted) return { recovered: false, reason: "recovery_timeout" };
+      return { recovered: false, reason: "recovery_http_rejected" };
     }
     const body = await readBoundedResponseBody(response, {
       signal,
@@ -465,10 +469,18 @@ async function requestRecovery(
       inactivityTimeoutMs: options.timeoutMs ?? 45_000,
       firstByteTimeoutMs: options.timeoutMs ?? 45_000,
     });
-    if (body.truncated || body.oversized || body.timedOut || !body.displaySafe) return null;
-    return assignmentFromRecoverySse(body.text, envelope);
-  } catch {
-    return null;
+    if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
+    if (controller.signal.aborted || body.timedOut) return { recovered: false, reason: "recovery_timeout" };
+    if (body.truncated || body.oversized || !body.displaySafe) return { recovered: false, reason: "recovery_invalid_output" };
+    const assignment = assignmentFromRecoverySse(body.text, envelope);
+    return assignment === null
+      ? { recovered: false, reason: "recovery_invalid_output" }
+      : { recovered: true, assignment };
+  } catch (error) {
+    if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
+    const decodeFailure = boundedBodyDecodeFailure(error);
+    if (controller.signal.aborted || decodeFailure === "timeout") return { recovered: false, reason: "recovery_timeout" };
+    return { recovered: false, reason: decodeFailure === "invalid_utf8" ? "recovery_invalid_output" : "recovery_transport_error" };
   } finally {
     clearTimeout(timeout);
   }
@@ -497,23 +509,23 @@ export async function recoverEncryptedAgentTaskWithResult(
   const admitted = admittedRecovery(req, input, config, context.parentThreadId);
   if (!admitted.admitted) return { recovered: false, reason: admitted.reason };
   const { admission, cacheKey, envelope } = admitted.recovery;
-  const assignment = await resolveCachedAgentTaskRecovery(
+  const result = await resolveCachedAgentTaskRecoveryWithResult(
     cacheKey,
     options.cacheEntries ?? 200,
     signal => requestRecovery(admission, envelope, options, signal),
     context.abortSignal,
   );
-  if (!assignment) {
+  if (!result.recovered) {
     return {
       recovered: false,
-      reason: context.abortSignal?.aborted ? "caller_cancelled" : "recovery_unavailable",
+      reason: context.abortSignal?.aborted ? "caller_cancelled" : result.reason,
     };
   }
   if (context.abortSignal?.aborted) {
     discardCachedAgentTaskRecovery(cacheKey);
     return { recovered: false, reason: "caller_cancelled" };
   }
-  if (!injectAssignment(input, envelope, assignment)) {
+  if (!injectAssignment(input, envelope, result.assignment)) {
     discardCachedAgentTaskRecovery(cacheKey);
     return { recovered: false, reason: "input_changed" };
   }

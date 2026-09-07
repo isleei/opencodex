@@ -122,6 +122,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientCline",
   "integrations.tab.aside",
   "api.clientConfig.clientAside",
+  "integrations.tab.raycast",
+  "api.clientConfig.clientRaycast",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "pws.pacingRpmUnit",

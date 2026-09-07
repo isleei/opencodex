@@ -409,7 +409,30 @@ default provider is enabled and is not itself an OpenAI-family entry; account-qu
 such as `side/gpt-5.6-sol` still fail closed. The proxy logs one notice per provider when this
 fallback engages. Configurations with an enabled canonical `openai` provider are unchanged.
 
-Native compact responses are buffered with a 32 MiB maximum, including responses whose declared
+Inbound bodies on both `/v1/responses` and `/v1/responses/compact` retain the shared 256 MiB
+wire/decompression admission limit. Application-level size rejection returns HTTP 413 with
+`type` and `code` both `invalid_request_error`. Its message includes a bounded diagnostic suffix,
+for example:
+
+```text
+Decompressed request body exceeds 268435456 bytes [measurement=decoded_lower_bound; bytes=268435457]
+```
+
+| Measurement | Meaning of `bytes` |
+| --- | --- |
+| `declared_wire` | Numeric `Content-Length` declared by the sender; rejected before reading, not a measured decoded size |
+| `observed_wire_lower_bound` | Wire bytes encountered when reading stopped; the complete body may be larger |
+| `decoded_exact` | Exact size of the buffer supplied to the identity decoder or returned by a decoder |
+| `decoded_lower_bound` | Admission limit plus one after inflation aborts; a lower bound, never the exact decoded size |
+
+The suffix contains only a fixed category and a finite numeric byte value. Rejected bodies are
+not read or inflated further, parsed for item counts, or retained for diagnostics. Legacy errors
+without measurement provenance retain the limit-only message. Bun's listener can reject an
+oversized wire body before application diagnostics run, so not every 413 carries this suffix.
+A lower-bound diagnostic cannot establish the complete compact payload size. The admission
+limit and retry behavior are unchanged.
+
+Native compact responses are buffered with a separate 32 MiB maximum, including responses whose declared
 `Content-Length` already exceeds the limit. The compact-specific failures include:
 
 | Status | Type or code | Meaning |

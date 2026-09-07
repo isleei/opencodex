@@ -1,4 +1,5 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
+import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
 import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
@@ -8,7 +9,7 @@ import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh, Ic
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
-import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
+import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
@@ -328,6 +329,22 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
+  const [displayNameSaving, setDisplayNameSaving] = useState(false);
+  const [displayNameRequestError, setDisplayNameRequestError] = useState<string | null>(null);
+  const [displayNameRecovery, setDisplayNameRecovery] = useState<{
+    value: string | null | undefined;
+    confirmed: boolean;
+  } | null>(null);
+  const [displayNameCurrentPending, setDisplayNameCurrentPending] = useState(false);
+  const displayNameRequestRef = useRef<BoundedFetch | null>(null);
+  const displayNameSavingRef = useRef(false);
+  useEffect(() => () => {
+    displayNameRequestRef.current?.controller.abort();
+    displayNameRequestRef.current?.clear();
+    displayNameRequestRef.current = null;
+  }, []);
+  const displayNameTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const reloadAliases = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch(`${apiBase}/api/aliases`, { signal });
@@ -535,12 +552,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   );
   const catalogState = catalogResource.state;
 
-  const load = useCallback(async (force = false): Promise<boolean> => {
+  const load = useCallback(async (force = false, signal?: AbortSignal): Promise<boolean> => {
     if (loadPendingRef.current && !force) return false;
     loadPendingRef.current = true;
     const generation = ++loadGenerationRef.current;
     try {
-      const next = await fetchCatalog(new AbortController().signal);
+      const next = await fetchCatalog(signal ?? new AbortController().signal);
       if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
       applyCatalog(next);
       // Follow-up mutation refreshes retain their existing awaitable contract while publishing
@@ -556,6 +573,118 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       }
     }
   }, [applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
+
+  const finishDisplayNameEdit = useCallback(() => {
+    const trigger = displayNameTriggerRef.current;
+    setDisplayNameModel(null);
+    setDisplayNameRequestError(null);
+    setDisplayNameRecovery(null);
+    setDisplayNameCurrentPending(false);
+    window.setTimeout(() => {
+      if (trigger?.isConnected) trigger.focus();
+    }, 0);
+  }, []);
+
+  const closeDisplayNameEdit = useCallback(() => {
+    if (!displayNameSavingRef.current) finishDisplayNameEdit();
+  }, [finishDisplayNameEdit]);
+
+  // undefined retries only the read after a confirmed write or an unknown outcome.
+  const saveDisplayName = useCallback(async (displayName: string | null | undefined) => {
+    const model = displayNameModel;
+    if (!model || displayNameSavingRef.current) return;
+    const bounded = createBoundedFetch(60_000);
+    displayNameRequestRef.current = bounded;
+    displayNameSavingRef.current = true;
+    setDisplayNameSaving(true);
+    setDisplayNameRequestError(null);
+    // A failed convergence retry cannot invalidate an earlier persistence receipt
+    // for the same value. Editing the draft clears recovery and starts a new intent.
+    let confirmed = displayNameRecovery?.confirmed === true
+      && (displayName === undefined || displayName === displayNameRecovery.value);
+    let receivedReceipt = displayName === undefined;
+    let refreshOnly = displayName === undefined;
+    try {
+      if (displayName !== undefined) {
+        const response = await fetch(
+          `${apiBase}/api/providers/${encodeURIComponent(model.provider)}/model-display-names`,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ modelId: model.id, displayName }),
+            signal: bounded.signal,
+          },
+        );
+        // The route can persist the value and return 503 when catalog convergence fails.
+        // Keep that receipt instead of throwing away saved:true with the error body.
+        type DisplayNameReceipt = {
+          saved?: boolean;
+          error?: string;
+          displayName?: string;
+          displayNameOverride?: string | null;
+          displayNameSource?: ModelRow["displayNameSource"];
+        };
+        const result: DisplayNameReceipt | undefined = response.ok
+          ? await readJsonOrThrow<DisplayNameReceipt>(response, t("models.displayNameSaveFailed"))
+          : await response.json();
+        bounded.signal.throwIfAborted();
+        if (!result || typeof result !== "object" || Array.isArray(result)
+          || (!response.ok && result.saved !== true && typeof result.error !== "string")) {
+          throw new Error(t("models.displayNameSaveFailed"));
+        }
+        receivedReceipt = true;
+        const receiptConfirmed = response.ok || result.saved === true;
+        confirmed = confirmed || receiptConfirmed;
+        if (receiptConfirmed) {
+          const override = result.displayNameOverride === null ? undefined
+            : result.displayNameOverride ?? displayName ?? undefined;
+          const fields: Pick<ModelRow, "displayName" | "displayNameOverride" | "displayNameSource"> = {
+            displayName: result.displayName ?? override,
+            displayNameOverride: override,
+            displayNameSource: result.displayNameSource ?? (override ? "operator" : undefined),
+          };
+          setModels(current => current.map(row => row.namespaced === model.namespaced ? { ...row, ...fields } : row));
+          setDisplayNameModel({ ...model, ...fields });
+          // A saved:true reset receipt omits the provider's effective fallback label.
+          setDisplayNameCurrentPending(fields.displayName === undefined);
+        }
+        if (!response.ok) {
+          throw new Error(result.error || t("models.displayNameSaveFailed"));
+        }
+        refreshOnly = true;
+      }
+      if (!await load(true, bounded.signal)) throw new Error(t("models.loadFail"));
+      bounded.signal.throwIfAborted();
+      publishFeedback(true, confirmed
+        ? t(displayName === null || (displayName === undefined && displayNameRecovery?.value === null)
+          ? "models.displayNameResetDone" : "models.displayNameSaved")
+        : t("models.displayNameReloaded"));
+      finishDisplayNameEdit();
+    } catch (error) {
+      if (displayNameRequestRef.current !== bounded) return;
+      // A dropped connection or unreadable body can hide a committed write just
+      // like a timeout. Reconcile by reading; never replay an unchanged old draft.
+      const unknownOutcome = !receivedReceipt || bounded.signal.aborted;
+      if (unknownOutcome && !confirmed) setDisplayNameCurrentPending(true);
+      setDisplayNameRecovery(confirmed || unknownOutcome || refreshOnly
+        ? { value: refreshOnly || unknownOutcome ? undefined : displayName, confirmed }
+        : null);
+      setDisplayNameRequestError(confirmed
+        ? t("models.displayNameSavedRefreshFailed")
+        : unknownOutcome || refreshOnly
+          ? t("models.displayNameOutcomeUnknown")
+          : error instanceof Error && error.message
+            ? error.message
+            : t("models.displayNameSaveFailed"));
+    } finally {
+      bounded.clear();
+      if (displayNameRequestRef.current === bounded) {
+        displayNameRequestRef.current = null;
+        displayNameSavingRef.current = false;
+        setDisplayNameSaving(false);
+      }
+    }
+  }, [apiBase, displayNameModel, displayNameRecovery, finishDisplayNameEdit, load, t]);
 
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
@@ -1537,9 +1666,31 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
                      {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                      {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                     <span className="models-model-identity">
+                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                       {!m.native && m.displayName?.trim() && m.displayName.trim() !== m.namespaced && (
+                         <span className="models-model-friendly text-caption">{m.displayName.trim()}</span>
+                       )}
+                     </span>
                      {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
                      <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+                     {!m.native && !m.custom && (
+                       <button
+                         type="button"
+                         className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
+                         aria-haspopup="dialog"
+                         aria-label={t("models.displayNameActionLabel", { model: m.namespaced })}
+                         onClick={event => {
+                           displayNameTriggerRef.current = event.currentTarget;
+                           setDisplayNameRequestError(null);
+                           setDisplayNameRecovery(null);
+                           setDisplayNameCurrentPending(false);
+                           setDisplayNameModel(m);
+                         }}
+                       >
+                         {t("models.displayNameAction")}
+                       </button>
+                     )}
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
@@ -2485,6 +2636,20 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </ErrorBoundary>
         )}
       </div>
+
+      {displayNameModel && (
+        <ModelDisplayNameDialog
+          model={displayNameModel}
+          saving={displayNameSaving}
+          requestError={displayNameRequestError}
+          currentNamePending={displayNameCurrentPending}
+          onRetry={displayNameRecovery ? () => void saveDisplayName(displayNameRecovery.value) : undefined}
+          onEdit={() => setDisplayNameRecovery(null)}
+          onSave={value => void saveDisplayName(value)}
+          onReset={() => void saveDisplayName(null)}
+          onClose={closeDisplayNameEdit}
+        />
+      )}
     </>
   );
 

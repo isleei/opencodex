@@ -296,6 +296,11 @@ test("an unsettled file list renders unknown rows instead of dropping them", () 
   expect(rowById(built, "zcode").state).toBe("unknown");
   expect(rowById(built, "prime").state).toBe("unknown");
   expect(rowById(built, "aside").state).toBe("unknown");
+  expect(rowById(built, "raycast")).toMatchObject({
+    hash: "integrations/raycast",
+    labelKey: "integrations.tab.raycast",
+    state: "unknown",
+  });
   expect(rowById(built, "kimi").state).toBe("unknown");
   expect(rowById(built, "cline").state).toBe("unknown");
   expect(rowById(built, "dsh")).toMatchObject({

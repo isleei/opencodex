@@ -273,6 +273,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan（預設）：`https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · pay as you go：`https://dashscope.aliyuncs.com/compatible-mode/v1` · 或 Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -418,7 +419,7 @@ quota probe 只會把 active key 傳送到 canonical A6API host，並拒絕 redi
 > **Tencent Cloud Coding Plan 使用限制：** Tencent 文件將此訂閱限定為互動式 coding tool。一般 API
 > automation、自訂 application backend 與非互動 batch 使用都被禁止，並可能造成 plan key 被停用。
 
-> **兩條 GLM 路徑：** `zai` 是 Z.AI 國際 Coding Plan 訂閱；`zhipu-bigmodel` 是智譜國內 BigModel
+> **GLM 計費路徑：** `zai` 是 Z.AI 國際 Coding Plan 訂閱；`zhipu-bigmodel` 是智譜國內 BigModel
 > pay-as-you-go endpoint。兩者 host、key 與 billing 都不同；其中一邊發出的 key 無法在另一邊通過認證。
 
 ### 多個 API 金鑰
