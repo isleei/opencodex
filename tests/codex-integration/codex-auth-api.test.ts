@@ -1241,15 +1241,24 @@ describe("codex-auth API", () => {
     expect((await listMain()).needsReauth).toBe(false);
   });
 
-  test("maskEmail hides local account names", () => {
-    expect(maskEmail("a@example.test")).toBe("*@example.test");
-    expect(maskEmail("ab@example.test")).toBe("a*@example.test");
-    expect(maskEmail("abcd@example.test")).toBe("a***d@example.test");
+  test("maskEmail preserves email by default or masks when OPENCODEX_MASK_EMAILS=1", () => {
+    expect(maskEmail("a@example.test")).toBe("a@example.test");
+    expect(maskEmail("ab@example.test")).toBe("ab@example.test");
+    expect(maskEmail("abcd@example.test")).toBe("abcd@example.test");
     expect(maskEmail("Codex App login")).toBe("Codex App login");
     expect(maskEmail(null)).toBeNull();
+
+    process.env.OPENCODEX_MASK_EMAILS = "1";
+    try {
+      expect(maskEmail("a@example.test")).toBe("*@example.test");
+      expect(maskEmail("ab@example.test")).toBe("a*@example.test");
+      expect(maskEmail("abcd@example.test")).toBe("a***d@example.test");
+    } finally {
+      delete process.env.OPENCODEX_MASK_EMAILS;
+    }
   });
 
-  test("GET /api/codex-auth/accounts masks pool account email", async () => {
+  test("GET /api/codex-auth/accounts returns pool account email", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "pool-mask", email: "person@example.test", isMain: false }],
     });
@@ -1265,7 +1274,7 @@ describe("codex-auth API", () => {
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     const data = await resp!.json() as { accounts: { id: string; email: string }[] };
 
-    expect(data.accounts.find(a => a.id === "pool-mask")?.email).toBe("p***n@example.test");
+    expect(data.accounts.find(a => a.id === "pool-mask")?.email).toBe("person@example.test");
   });
 
   test("GET /api/codex-auth/accounts omits a malformed persisted plan", async () => {
@@ -1385,7 +1394,7 @@ describe("codex-auth API", () => {
 
     expect(pool).toMatchObject({
       id: "pool-safe",
-      email: "p***n@example.test",
+      email: "person@example.test",
       plan: "Plus",
       logLabel: fallbackCodexAccountLogLabel("pool-safe"),
       isMain: false,

@@ -3,8 +3,8 @@
  * components only — a page module that also exports helpers breaks Fast Refresh
  * (react-refresh/only-export-components).
  */
-export type LogSurface = "claude" | "claude-desktop" | "grok" | "antigravity" | "agy";
-export type LogSurfaceFilter = "all" | "claude" | "codex" | "grok" | "agy";
+export type LogSurface = "claude" | "claude-desktop" | "grok" | "antigravity" | "agy" | "opencode";
+export type LogSurfaceFilter = "all" | "claude" | "codex" | "grok" | "agy" | "opencode";
 
 /** Match Usage surface buckets: Claude includes Desktop; Codex is untagged. */
 export function logMatchesSurface(log: { surface?: LogSurface }, filter: LogSurfaceFilter): boolean {
@@ -12,5 +12,6 @@ export function logMatchesSurface(log: { surface?: LogSurface }, filter: LogSurf
   if (filter === "claude") return log.surface === "claude" || log.surface === "claude-desktop";
   if (filter === "grok") return log.surface === "grok";
   if (filter === "agy") return log.surface === "agy" || log.surface === "antigravity";
+  if (filter === "opencode") return log.surface === "opencode";
   return log.surface === undefined;
 }

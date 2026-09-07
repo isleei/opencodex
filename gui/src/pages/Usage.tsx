@@ -75,6 +75,28 @@ interface UsageProvider {
   shareRatio: number;
 }
 
+interface UsageAccount {
+  accountLogLabel: string;
+  ambiguous: boolean;
+  requests: number;
+  attemptCount: number;
+  measuredAttempts: number;
+  reportedAttempts: number;
+  estimatedAttempts: number;
+  unmeteredAttempts: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  usageCoverageRatio: number;
+  estimatedCostUsd?: number;
+  pricedAttempts: number;
+  unpricedAttempts: number;
+  priceCoverageRatio: number;
+}
+
 interface UsageResponse {
   range: Range;
   surface: UsageSurface;
@@ -84,6 +106,12 @@ interface UsageResponse {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  accounts?: UsageAccount[];
+  filter?: {
+    provider?: string | null;
+    model?: string | null;
+    apiKeyId?: string | null;
+  };
   historyTruncated: boolean;
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
@@ -609,6 +637,156 @@ function UsageProvidersTable({
   );
 }
 
+interface AccountIdentity {
+  displayName: string;
+  email?: string;
+  alias?: string;
+  isMain?: boolean;
+}
+
+function UsageAccountsTable({
+  accounts,
+  accountQuery,
+  onAccountQuery,
+  accountMap,
+  filterActive = false,
+  locale,
+  t,
+  workspace = false,
+}: {
+  accounts: UsageAccount[];
+  accountQuery: string;
+  onAccountQuery: (query: string) => void;
+  accountMap: Map<string, AccountIdentity>;
+  filterActive?: boolean;
+  locale: Locale;
+  t: TFn;
+  workspace?: boolean;
+}) {
+  const searchLabel = t("usage.search.accounts");
+  const sectionLabel = t("usage.section.accounts");
+  const titleId = "usage-accounts-title";
+  const searchInput = (
+    <input
+      className="input"
+      aria-label={searchLabel}
+      placeholder={searchLabel}
+      value={accountQuery}
+      onChange={event => onAccountQuery(event.target.value)}
+    />
+  );
+
+  const totalAccountTokens = useMemo(() => {
+    return accounts.reduce((sum, a) => sum + a.totalTokens, 0);
+  }, [accounts]);
+
+  const filtered = useMemo(() => {
+    const q = accountQuery.trim().toLowerCase();
+    const sorted = accounts.toSorted((a, b) => b.totalTokens - a.totalTokens);
+    if (!q) return sorted;
+    return sorted.filter(acc => {
+      if (acc.accountLogLabel.toLowerCase().includes(q)) return true;
+      const identity = accountMap.get(acc.accountLogLabel);
+      if (identity) {
+        if (identity.displayName.toLowerCase().includes(q)) return true;
+        if (identity.email?.toLowerCase().includes(q)) return true;
+        if (identity.alias?.toLowerCase().includes(q)) return true;
+      }
+      return false;
+    });
+  }, [accounts, accountQuery, accountMap]);
+
+  let content: ReactNode;
+  if (filterActive && accounts.length === 0) {
+    content = (
+      <p className="muted text-control" style={{ marginTop: 12 }}>
+        {t("usage.account.filteredNotice")}
+      </p>
+    );
+  } else if (filtered.length === 0) {
+    content = (
+      <p className="muted text-control" style={{ marginTop: 12 }}>
+        {t("usage.empty")}
+      </p>
+    );
+  } else {
+    content = (
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>{t("usage.col.account")}</th>
+              <th className="num">{t("usage.col.requests")}</th>
+              <th className="num">{t("usage.col.measured")}</th>
+              <th className="num">{t("usage.col.tokens")}</th>
+              <th className="num">{t("logs.col.estimatedCost")}</th>
+              <th>{t("usage.col.share")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(acc => {
+              const identity = accountMap.get(acc.accountLogLabel);
+              const share = totalAccountTokens > 0 ? acc.totalTokens / totalAccountTokens : 0;
+              const titleTokens = `Input: ${formatTokens(acc.inputTokens, locale)} | Output: ${formatTokens(acc.outputTokens, locale)}${acc.cacheReadInputTokens > 0 ? ` | Cache: ${formatTokens(acc.cacheReadInputTokens, locale)}` : ""}`;
+              return (
+                <tr key={acc.accountLogLabel}>
+                  <td>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      {identity ? (
+                        <>
+                          <span style={{ fontWeight: 600 }}>{identity.displayName}</span>
+                          <span className="mono muted" style={{ fontSize: "0.8em" }}>({acc.accountLogLabel})</span>
+                        </>
+                      ) : (
+                        <span className="mono">{acc.accountLogLabel}</span>
+                      )}
+                      {acc.ambiguous && (
+                        <span className="muted text-xs" style={{ border: "1px solid var(--border-subtle, #333)", borderRadius: 4, padding: "1px 5px" }}>
+                          {t("usage.account.ambiguous")}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="num">{acc.requests}</td>
+                  <td className="num">{acc.measuredAttempts}</td>
+                  <td className="num mono" title={titleTokens}>{formatTokens(acc.totalTokens, locale)}</td>
+                  <td className="num mono muted">
+                    {acc.estimatedCostUsd !== undefined ? formatUsdEstimate(acc.estimatedCostUsd) : "—"}
+                  </td>
+                  <td>
+                    <div className="usage-bar">
+                      <div className="usage-bar-fill" style={{ width: `${Math.round(share * 100)}%` }} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (workspace) {
+    return (
+      <UsageWorkspaceSection title={sectionLabel} titleId={titleId}>
+        <div className="usw-section-toolbar">{searchInput}</div>
+        {content}
+      </UsageWorkspaceSection>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <div className="panel-head">
+        <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+        {searchInput}
+      </div>
+      {content}
+    </section>
+  );
+}
+
 function UsageCoveragePanel({
   summary,
   t,
@@ -651,7 +829,7 @@ function UsageCoveragePanel({
 
 /**
  * Workspace layout for Usage: left rail picks one report section so Overview /
- * Models / Providers / Coverage do not stack into a long scroll.
+ * Models / Providers / Accounts / Coverage do not stack into a long scroll.
  */
 function UsageWorkspaceBody({
   data,
@@ -662,6 +840,9 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
+  accountQuery,
+  onAccountQuery,
+  accountMap,
   range,
   locale,
   t,
@@ -674,6 +855,9 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
+  accountQuery: string;
+  onAccountQuery: (query: string) => void;
+  accountMap: Map<string, AccountIdentity>;
   range: Range;
   locale: Locale;
   t: TFn;
@@ -705,6 +889,25 @@ function UsageWorkspaceBody({
       meta: data ? `${data.providers.length}` : "—",
       body: data
         ? <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} workspace />
+        : null,
+    },
+    {
+      id: "accounts",
+      label: t("usage.section.accounts"),
+      meta: data ? `${(data.accounts ?? []).length}` : "—",
+      body: data
+        ? (
+          <UsageAccountsTable
+            accounts={data.accounts ?? []}
+            accountQuery={accountQuery}
+            onAccountQuery={onAccountQuery}
+            accountMap={accountMap}
+            filterActive={Boolean(data.filter?.provider || data.filter?.model)}
+            locale={locale}
+            t={t}
+            workspace
+          />
+        )
         : null,
     },
     {
@@ -765,6 +968,37 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [scope, setScope] = useState<UsageScope>("machine");
   const [modelQuery, setModelQuery] = useState("");
+  const [accountQuery, setAccountQuery] = useState("");
+  const [accountMap, setAccountMap] = useState<Map<string, AccountIdentity>>(() => new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBase}/api/codex-auth/accounts`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(body => {
+        if (cancelled || !body || !Array.isArray(body.accounts)) return;
+        const map = new Map<string, AccountIdentity>();
+        for (const account of body.accounts) {
+          if (!account || typeof account !== "object") continue;
+          const isMain = Boolean(account.isMain);
+          const logLabel = isMain ? "main" : (account.logLabel || account.id);
+          const email = typeof account.email === "string" ? account.email : undefined;
+          const alias = typeof account.alias === "string" && account.alias ? account.alias : undefined;
+          const displayName = alias ? (email ? `${alias} (${email})` : alias) : (email || logLabel);
+          map.set(logLabel, {
+            displayName,
+            email,
+            alias,
+            isMain,
+          });
+        }
+        setAccountMap(map);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const query = new URLSearchParams({ range, surface });
@@ -872,6 +1106,9 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
+            accountQuery={accountQuery}
+            onAccountQuery={setAccountQuery}
+            accountMap={accountMap}
             range={range}
             locale={locale}
             t={t}

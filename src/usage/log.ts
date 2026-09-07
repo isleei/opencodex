@@ -126,7 +126,7 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
-  surface?: "claude" | "claude-desktop" | "grok" | "antigravity" | "agy";
+  surface?: "claude" | "claude-desktop" | "grok" | "antigravity" | "agy" | "opencode";
   /** Matched configured key id; absent for environment/loopback admissions and
    *  for every row written before attribution existed. */
   apiKeyId?: string;
@@ -188,6 +188,7 @@ const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>
   "grok",
   "antigravity",
   "agy",
+  "opencode",
 ]);
 
 /**

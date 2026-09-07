@@ -7,17 +7,14 @@ import {
   IconList,
   IconSearch,
   IconCopy,
-  IconEye,
-  IconEyeOff,
   IconPlay,
   IconInfo,
   IconTag,
-  IconCalendar,
-  IconTerminal,
   IconX,
 } from "../icons";
 import { providerIconSrc } from "../provider-icons";
 import { displayAccountId } from "../lib/privacy";
+import QuotaBars from "../components/QuotaBars";
 import { agyRemaining, formatAgyObservedAt, formatAgyResetAt, resolveAgyQuota } from "../lib/agy-quota";
 import "../styles-subscriptions.css";
 
@@ -72,6 +69,7 @@ interface CodexAccountSummary {
     resetCredits?: number;
     plan?: string;
     customWindows?: any[];
+    updatedAt?: number;
   } | null;
   quotaUnavailable?: boolean;
   quotaStale?: boolean;
@@ -268,7 +266,6 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
   const [activeTab, setActiveTab] = useState<TabType>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [showSecretKey, setShowSecretKey] = useState(false);
 
   // AGY state
   const [agyAccounts, setAgyAccounts] = useState<OAuthAccount[]>([]);
@@ -929,7 +926,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
         </section>
       )}
 
-      {/* SECTION 2: OpenAI Codex Subscription & API Service */}
+      {/* SECTION 2: OpenAI Codex Subscription */}
       {(activeTab === "all" || activeTab === "codex") && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -943,77 +940,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-            {/* Left: API Service Card (Cockpit Style) */}
-            <div className="cockpit-service-card">
-              <div className="cockpit-service-head">
-                <span className="cockpit-service-title">API 服务</span>
-                <span className="cockpit-badge-active" style={{ background: "#10b981" }}>已启用</span>
-              </div>
-
-              <div className="cockpit-service-prop">
-                <span style={{ color: "var(--muted)", fontWeight: 600 }}>服务端点</span>
-                <div className="cockpit-service-val">
-                  <span>http://127.0.0.1:10100/v1</span>
-                  <button
-                    type="button"
-                    style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                    onClick={() => copyToClipboard("http://127.0.0.1:10100/v1", "API 端点")}
-                  >
-                    <IconCopy style={{ width: 12, height: 12 }} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="cockpit-service-prop">
-                <span style={{ color: "var(--muted)", fontWeight: 600 }}>API 密钥</span>
-                <div className="cockpit-service-val">
-                  <span>{showSecretKey ? "agt_codex_7921bf38a209" : "agt_codex_••••••••••••"}</span>
-                  <button
-                    type="button"
-                    style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                    onClick={() => setShowSecretKey(!showSecretKey)}
-                  >
-                    {showSecretKey ? <IconEyeOff style={{ width: 12, height: 12 }} /> : <IconEye style={{ width: 12, height: 12 }} />}
-                  </button>
-                  <button
-                    type="button"
-                    style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                    onClick={() => copyToClipboard("agt_codex_7921bf38a209", "API 密钥")}
-                  >
-                    <IconCopy style={{ width: 12, height: 12 }} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="cockpit-service-prop">
-                <span style={{ color: "var(--muted)", fontWeight: 600 }}>OAuth 绑定</span>
-                <span className="badge badge-muted text-caption">已绑定 (Team)</span>
-              </div>
-
-              <div className="cockpit-service-prop">
-                <span style={{ color: "var(--muted)", fontWeight: 600 }}>监听范围</span>
-                <span style={{ fontWeight: 600 }}>仅本机</span>
-              </div>
-
-              <div className="cockpit-card-footer" style={{ marginTop: "auto" }}>
-                <span>本地代理服务在线</span>
-                <div className="cockpit-footer-actions">
-                  <button type="button" className="cockpit-icon-btn" title="终端指令">
-                    <IconTerminal style={{ width: 13, height: 13 }} />
-                  </button>
-                  <button
-                    type="button"
-                    className="cockpit-icon-btn"
-                    title="刷新状态"
-                    onClick={() => void loadData({ refresh: true })}
-                  >
-                    <IconRefresh style={{ width: 13, height: 13 }} />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Main Codex Account Card */}
+            {/* Main Codex Account Card */}
             {filteredCodexMain ? (
               <div className="cockpit-card active">
                 <div>
@@ -1031,7 +958,6 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                   </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 10px 0", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12, color: "var(--muted)" }}>Team Name: MyTeam</span>
                     <button
                       type="button"
                       className="cockpit-note-btn"
@@ -1039,16 +965,12 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                     >
                       <IconTag style={{ width: 11, height: 11 }} /> 加备注
                     </button>
-                    {(filteredCodexMain.quota?.resetCredits ?? 2) > 0 && (
+                    {(filteredCodexMain.quota?.resetCredits ?? 0) > 0 && (
                       <span className="cockpit-badge-ticket" title="可用充能卡券">
                         <IconTicket style={{ width: 12, height: 12 }} />
-                        重置 {filteredCodexMain.quota?.resetCredits ?? 2}
+                        重置 {filteredCodexMain.quota?.resetCredits}
                       </span>
                     )}
-                  </div>
-
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
-                    使用 passkey 登录 | 用户 ID: 102***88c
                   </div>
 
                   {/* Codex Quotas */}
@@ -1089,31 +1011,10 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                       </span>
                     </div>
                   </div>
-
-                  {/* Expiry Banner */}
-                  <div style={{
-                    marginTop: 10,
-                    background: "rgba(245, 158, 11, 0.08)",
-                    border: "1px solid rgba(245, 158, 11, 0.25)",
-                    borderRadius: "var(--radius-md)",
-                    padding: "8px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    fontSize: 12,
-                    color: "#d97706",
-                    fontWeight: 600,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <IconCalendar style={{ width: 13, height: 13 }} />
-                      <span>订阅有效期 6天</span>
-                    </div>
-                    <span className="mono" style={{ fontSize: 11 }}>2026-09-10 15:17</span>
-                  </div>
                 </div>
 
                 <div className="cockpit-card-footer">
-                  <span>2026/09/04 17:36</span>
+                  <span>{filteredCodexMain.quota?.updatedAt ? formatCardDate(filteredCodexMain.quota.updatedAt) : "Main Account"}</span>
                   <div className="cockpit-footer-actions">
                     <button
                       type="button"
@@ -1197,15 +1098,23 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                   </div>
 
                   <div className="cockpit-card-footer">
-                    <span>Pool Account</span>
+                    <span>{acc.quota?.updatedAt ? formatCardDate(acc.quota.updatedAt) : "Pool Account"}</span>
                     <div className="cockpit-footer-actions">
                       <button
                         type="button"
                         className="cockpit-icon-btn"
-                        title="复制 ID"
-                        onClick={() => copyToClipboard(acc.id, "账号 ID")}
+                        title="复制账号"
+                        onClick={() => copyToClipboard(acc.email || acc.id, "Codex 账号")}
                       >
                         <IconCopy style={{ width: 13, height: 13 }} />
+                      </button>
+                      <button
+                        type="button"
+                        className="cockpit-icon-btn"
+                        title="刷新额度"
+                        onClick={() => void loadData({ refresh: true })}
+                      >
+                        <IconRefresh style={{ width: 13, height: 13 }} />
                       </button>
                     </div>
                   </div>
@@ -1258,9 +1167,11 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                           {label}
                         </span>
                         {isActive && <span className="cockpit-badge-active">当前</span>}
-                        <span className="cockpit-badge-grok">
-                          {account.plan || "Grok Pro"}
-                        </span>
+                        {typeof account.plan === "string" && account.plan.trim() && (
+                          <span className="cockpit-badge-grok">
+                            {account.plan.trim()}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1275,61 +1186,30 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                     </div>
 
                     <div className="cockpit-dual-quota-box" style={{ gap: 10 }}>
-                      <div className="cockpit-quota-metric">
-                        <div className="cockpit-metric-head">
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <IconCalendar style={{ width: 12, height: 12, color: "var(--muted)" }} />
-                            <span className="cockpit-metric-label">每周用量</span>
-                          </div>
-                          <span className="cockpit-metric-val green">剩余 89%</span>
-                        </div>
-                        <div className="cockpit-progress-bg">
-                          <div className="cockpit-progress-fill green" style={{ width: "89%" }} />
-                        </div>
-                        <span className="cockpit-metric-time">2026/9/7 13:47:16</span>
-                      </div>
-
-                      <div className="cockpit-quota-metric">
-                        <div className="cockpit-metric-head">
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <IconCalendar style={{ width: 12, height: 12, color: "var(--muted)" }} />
-                            <span className="cockpit-metric-label">GrokBuild</span>
-                          </div>
-                          <span className="cockpit-metric-val green">剩余 90%</span>
-                        </div>
-                        <div className="cockpit-progress-bg">
-                          <div className="cockpit-progress-fill green" style={{ width: "90%" }} />
-                        </div>
-                        <span className="cockpit-metric-time">2026/9/7 13:47:16</span>
-                      </div>
-
-                      <div className="cockpit-quota-metric">
-                        <div className="cockpit-metric-head">
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <IconCalendar style={{ width: 12, height: 12, color: "var(--muted)" }} />
-                            <span className="cockpit-metric-label">GrokChat</span>
-                          </div>
-                          <span className="cockpit-metric-val green">剩余 99%</span>
-                        </div>
-                        <div className="cockpit-progress-bg">
-                          <div className="cockpit-progress-fill green" style={{ width: "99%" }} />
-                        </div>
-                        <span className="cockpit-metric-time">2026/9/7 13:47:16</span>
-                      </div>
-
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", paddingTop: 4, borderTop: "1px dashed var(--border)" }}>
-                        <span>高频任务</span>
-                        <span style={{ fontWeight: 600, color: "#10b981" }}>0/10 · 剩余 100%</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)" }}>
-                        <span>普通任务</span>
-                        <span style={{ fontWeight: 600, color: "#10b981" }}>0/30 · 剩余 100%</span>
-                      </div>
+                      {account.quotaUnavailable && account.quota == null ? (
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                          {t("pws.accountQuotaUnavailable")}
+                        </span>
+                      ) : account.quota != null ? (
+                        <QuotaBars
+                          quota={account.quota}
+                          plan={account.plan ?? null}
+                          threshold={80}
+                          t={t}
+                          layout="stacked"
+                        />
+                      ) : typeof account.plan === "string" && account.plan.trim() ? (
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                          {t("pws.accountPlanOnly", { plan: account.plan.trim() })}
+                        </span>
+                      ) : (
+                        <QuotaBars quota={null} plan={null} threshold={80} t={t} layout="stacked" pending />
+                      )}
                     </div>
                   </div>
 
                   <div className="cockpit-card-footer">
-                    <span>{formatCardDate(account.expiresAt)}</span>
+                    <span>{typeof account.quota?.updatedAt === "number" ? formatCardDate(account.quota.updatedAt) : formatCardDate(account.expiresAt)}</span>
                     <div className="cockpit-footer-actions">
                       <button
                         type="button"
