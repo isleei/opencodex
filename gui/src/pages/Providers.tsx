@@ -611,15 +611,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelsLoading={data.modelsLoading}
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}
-            onRefreshModels={async (result) => {
-              // Paint chips + reload selected-models, then re-read config so providers[name].models
-              // (persisted by refresh-models) shows up in Settings / rail counts immediately.
-              await data.onRefreshModels?.(result);
-              if (result?.persisted) {
-                await fetchConfig();
-                bumpModelsRefresh();
-              }
-            }}
             oauthEmail={loginStatus?.email}
             onDeselect={() => setWorkspaceSelected(null)}
             apiBase={apiBase}

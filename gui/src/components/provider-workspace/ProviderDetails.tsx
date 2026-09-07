@@ -40,7 +40,6 @@ export default function ProviderDetails({
   modelsLoading,
   modelsLoadFailed,
   onRetryModels,
-  onRefreshModels,
   oauthEmail,
   onDeselect,
   apiBase,
@@ -78,7 +77,6 @@ export default function ProviderDetails({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
-  onRefreshModels?: (result?: import("./ProviderWorkspaceShell").ProviderModelsRefreshResult) => void | Promise<void>;
   oauthEmail?: string;
   onDeselect: () => void;
   apiBase: string;
@@ -315,7 +313,6 @@ export default function ProviderDetails({
               || oauth?.needsReauth === true
             }
             onRetryModels={onRetryModels}
-            onRefreshModels={onRefreshModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
           />
         )}
