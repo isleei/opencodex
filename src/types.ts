@@ -108,6 +108,7 @@ export type {
   AttemptTierOutcome,
   TierObservationContext,
   TierDecision,
+  ClientIdentityMode,
   OcxProviderConfig,
 } from "./types/provider";
 

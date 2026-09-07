@@ -214,3 +214,19 @@ test("passive account refresh reports unobserved without sending a quota request
   expect(body.accounts[0].quotaUnavailable).toBeUndefined();
   expect(requests).toBe(0);
 });
+
+
+test("AGY cached reads expose stale and refreshing flags without waiting for a quota probe", async () => {
+  await saveCredential("google-antigravity", { access: "fixture-agy", refresh: "fixture-refresh", expires: Date.now() + 3600000, projectId: "fixture-project", email: "fixture@example.com" });
+  const accountId = getAccountSet("google-antigravity")!.activeAccountId;
+  const config: OcxConfig = { port: 0, defaultProvider: "google-antigravity", providers: { "google-antigravity": { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" } } };
+  const observed = Date.now() - 660000;
+  const snapshot = spyOn(quotaApi, "readAgyAccountQuotas").mockReturnValue([{ accountId, quota: { updatedAt: observed }, stale: true, refreshing: true }]);
+  try {
+    const body = await (await read("/api/oauth/accounts?provider=google-antigravity&quota=1&cached=1", config)).json();
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(body.accounts[0].quotaStale).toBe(true);
+    expect(body.accounts[0].quotaRefreshing).toBe(true);
+    expect(body.accounts[0].quota.updatedAt).toBe(observed);
+  } finally { snapshot.mockRestore(); }
+});

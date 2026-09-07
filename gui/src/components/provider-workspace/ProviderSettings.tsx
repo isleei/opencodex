@@ -19,7 +19,7 @@ import { openAiAccountProviderState } from "../../provider-payload";
 import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
-import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult, ClientIdentityMode } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 const EMPTY_MODELS: string[] = [];
@@ -82,6 +82,7 @@ export default function ProviderSettings({
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
+  const [clientIdentity, setClientIdentity] = useState<ClientIdentityMode>(item.clientIdentity ?? "none");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [accountMode, setAccountMode] = useState<"pool" | "direct">(item.codexAccountMode ?? "pool");
@@ -110,6 +111,7 @@ export default function ProviderSettings({
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
+    setClientIdentity(item.clientIdentity ?? "none");
     setPacingEnabled(item.requestPacing?.enabled === true);
     setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
@@ -117,7 +119,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.clientIdentity, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -194,7 +196,8 @@ export default function ProviderSettings({
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
     || liveModels !== savedLiveModels
-    || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
+    || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion)
+    || clientIdentity !== (item.clientIdentity ?? "none");
   const pacingDirty = pacingSignature(pacingDraft) !== pacingSignature(item.requestPacing);
   const formDirty = dirty || pacingDirty;
 
@@ -254,6 +257,9 @@ export default function ProviderSettings({
         if (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion) {
           patch.upstreamHttpVersion = cursorHttpVersion === "http1.1" ? "http1.1" : null;
         }
+        if (clientIdentity !== (item.clientIdentity ?? "none")) {
+          patch.clientIdentity = clientIdentity;
+        }
         if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
         else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
       }
@@ -299,6 +305,7 @@ export default function ProviderSettings({
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
+    setClientIdentity(item.clientIdentity ?? "none");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
@@ -451,6 +458,23 @@ export default function ProviderSettings({
           </select>
         </label>
       )}
+      <label className="pwi-settings-field">
+        <span className="pwi-settings-label">{t("pws.clientIdentity")}</span>
+        <select
+          className="input"
+          value={clientIdentity}
+          onChange={e => setClientIdentity(e.target.value as ClientIdentityMode)}
+        >
+          <option value="none">{t("pws.clientIdentity.none")}</option>
+          <option value="auto">{t("pws.clientIdentity.auto")}</option>
+          <option value="passthrough">{t("pws.clientIdentity.passthrough")}</option>
+          <option value="codex">{t("pws.clientIdentity.codex")}</option>
+          <option value="claude-code">{t("pws.clientIdentity.claudeCode")}</option>
+          <option value="grok">{t("pws.clientIdentity.grok")}</option>
+          <option value="agy">{t("pws.clientIdentity.agy")}</option>
+        </select>
+        <span className="pwi-settings-hint">{t("pws.clientIdentityDesc")}</span>
+      </label>
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.note")}</span>
         <textarea className="input pwi-settings-textarea" value={note} onChange={e => setNote(e.target.value)} rows={2} />

@@ -57,7 +57,11 @@ export interface WorkspaceProvider {
   codexAccountMode?: "direct" | "pool";
   /** Derived state of the two xAI Grok Responses model-adapter entries. */
   xaiResponsesOptInState?: boolean | "mixed";
+  /** Client identity spoofing and passthrough policy for upstream gateway compatibility. */
+  clientIdentity?: ClientIdentityMode;
 }
+
+export type ClientIdentityMode = "auto" | "passthrough" | "codex" | "claude-code" | "grok" | "agy" | "none";
 
 /** Three-way pricing/ownership tier for a ready provider row. */
 export type ProviderTier = "free" | "paid" | "accounts";

@@ -93,10 +93,11 @@ test("AGY shows the weekly subscription usage hidden by a full catalog", async (
   expect(text()).toContain("Reset unknown"); expect(text()).toContain("Observed");
   expect(text()).not.toContain("Sampled from");
 });
-test("failed summary hides stale quota instead of presenting it as current", async () => {
+test("failed summary keeps a visibly stale reading and its observation time", async () => {
   installStaleFetch(); await mountSubscriptions();
-  expect(text()).toContain("Quota unavailable");
-  expect(text()).not.toContain("100% remaining");
+  expect(text()).toContain("Cached reading — out of date");
+  expect(text()).toContain("94.74% remaining");
+  expect(host.querySelectorAll(".cockpit-progress-fill.stale")).toHaveLength(4);
 });
 test("pre-fix all-full model cache is unknown, never subscription quota", async () => {
   installFetch({ updatedAt: UPDATED_AT, agyModels: [{ modelId: "gemini-a", percent: 0 }] });
@@ -133,7 +134,7 @@ test("failed AGY quota retries automatically and stops after recovery", async ()
     return realSetTimeout(handler, delay);
   }) as typeof testWindow.setTimeout;
   await mountSubscriptions();
-  expect(text()).toContain("Quota unavailable");
+  expect(text()).toContain("Cached reading — out of date");
   expect(retry).toBeDefined();
   installFetch();
   const fetchRecovered = globalThis.fetch;
@@ -146,6 +147,41 @@ test("failed AGY quota retries automatically and stops after recovery", async ()
   };
   await act(async () => { retry!(); await new Promise(resolve => setTimeout(resolve, 50)); });
   expect(text()).toContain("100% remaining");
-  expect(text()).not.toContain("Quota unavailable");
+  expect(text()).not.toContain("Cached reading — out of date");
   expect(retries).toBe(1);
+});
+
+
+test("background refresh paints the cached reading first and polls only AGY", async () => {
+  installFetch();
+  const ready = globalThis.fetch;
+  const calls: string[] = [];
+  let updated = false;
+  let poll: (() => void) | undefined;
+  const realTimer = testWindow.setTimeout.bind(testWindow);
+  testWindow.setTimeout = ((handler: () => void, delay?: number) => {
+    if (delay === 2000) poll = handler;
+    return realTimer(handler, delay);
+  }) as typeof testWindow.setTimeout;
+  (globalThis as { fetch?: unknown }).fetch = async (url: string | URL | Request) => {
+    calls.push(String(url));
+    const response = await ready(url);
+    if (!String(url).includes("provider=google-antigravity")) return response;
+    const body = await response.json();
+    body.accounts[0].quotaStale = !updated;
+    body.accounts[0].quotaRefreshing = !updated;
+    if (updated) body.accounts[0].quota.agyQuotaGroups[0].windows[0].percent = 10;
+    return Response.json(body);
+  };
+  await mountSubscriptions();
+  expect(text()).toContain("94.74% remaining");
+  expect(text()).toContain("Cached reading — out of date");
+  expect(text()).toContain("Updating quota");
+  const count = calls.length;
+  updated = true;
+  await act(async () => { poll!(); await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(calls.slice(count)).toHaveLength(1);
+  expect(calls[count]).toContain("provider=google-antigravity");
+  expect(text()).toContain("90% remaining");
+  expect(text()).not.toContain("Cached reading — out of date");
 });

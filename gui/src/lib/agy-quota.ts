@@ -9,7 +9,7 @@ export interface AgyQuotaBucket {
 }
 
 export interface AgyQuotaState {
-  status: "ok" | "unknown" | "unavailable";
+  status: "ok" | "stale" | "unknown" | "unavailable";
   buckets: AgyQuotaBucket[];
   updatedAt?: number;
 }
@@ -21,11 +21,12 @@ export function agyRemaining(value: unknown): number | null {
 export function resolveAgyQuota(account: {
   quota?: { agyQuotaGroups?: unknown; agyModels?: unknown; customWindows?: unknown; updatedAt?: unknown } | null;
   quotaUnavailable?: boolean;
+  quotaStale?: boolean;
 }): AgyQuotaState {
   const observed = account.quota?.updatedAt;
   const updatedAt = typeof observed === "number" && Number.isFinite(observed) && observed > 0 ? observed : undefined;
   const empty: AgyQuotaState = { status: account.quotaUnavailable ? "unavailable" : "unknown", buckets: [], ...(updatedAt ? { updatedAt } : {}) };
-  if (account.quotaUnavailable || !Array.isArray(account.quota?.agyQuotaGroups)) return empty;
+  if (!Array.isArray(account.quota?.agyQuotaGroups)) return empty;
   const buckets: AgyQuotaBucket[] = [];
   for (const group of account.quota.agyQuotaGroups) {
     if (!group || (group.id !== "gemini" && group.id !== "claude-gpt") || !Array.isArray(group.windows)) return empty;
@@ -38,7 +39,7 @@ export function resolveAgyQuota(account: {
     }
   }
   if (buckets.length !== 4) return empty;
-  return { ...empty, status: "ok", buckets };
+  return { ...empty, status: account.quotaStale || account.quotaUnavailable ? "stale" : "ok", buckets };
 }
 
 export function formatAgyObservedAt(timestamp: unknown): string | null {

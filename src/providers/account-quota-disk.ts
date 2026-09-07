@@ -25,7 +25,7 @@ const FILENAME = "provider-account-quota-cache.json";
  * already handles — but a day-old reading of a monthly window has drifted far enough that
  * it should not outrank a fresh probe.
  */
-const DISK_MAX_AGE_MS = 6 * 60 * 60_000;
+export const ACCOUNT_QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
 const PERSIST_DEBOUNCE_MS = 250;
 
 type DiskFile = {
@@ -46,7 +46,7 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
     if (!parsed || parsed.version !== 1 || !parsed.rows || typeof parsed.rows !== "object") return rows;
     for (const [key, quota] of Object.entries(parsed.rows)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
-      if (now - quota.updatedAt > DISK_MAX_AGE_MS) continue;
+      if (now - quota.updatedAt > ACCOUNT_QUOTA_DISK_MAX_AGE_MS) continue;
       rows.set(key, quota);
     }
   } catch {

@@ -616,3 +616,7 @@
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+.cockpit-metric-val.stale, .agy-quota-stale-note { color: var(--muted); }
+.cockpit-progress-fill.stale { background: var(--muted); opacity: 0.5; }
+.agy-quota-stale-note { font-size: 12px; }

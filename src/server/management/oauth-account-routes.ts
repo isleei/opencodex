@@ -30,7 +30,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerOAuthAccountQuotaMode, providerApiKeyQuotaMode, readPassiveProviderAccountQuotas } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerOAuthAccountQuotaMode, providerApiKeyQuotaMode, readPassiveProviderAccountQuotas, readAgyAccountQuotas } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
@@ -356,7 +356,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // from the post-probe store so the response is not stale.
     const rows = passiveQuota
       ? readPassiveProviderAccountQuotas(provider)
-      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider);
+      : provider === "google-antigravity" && !forceRefresh && url.searchParams.get("cached") === "1"
+        ? readAgyAccountQuotas()
+        : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     const withQuota = {
@@ -371,6 +373,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           ...account,
           quota: row.quota,
           ...(row.plan ? { plan: row.plan } : {}),
+          ...(row.stale ? { quotaStale: true } : {}),
+          ...(row.refreshing ? { quotaRefreshing: true } : {}),
           ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true } : {}),
         };
       }),

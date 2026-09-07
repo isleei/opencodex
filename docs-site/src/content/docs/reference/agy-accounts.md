@@ -107,11 +107,20 @@ for subscription bars. Existing catalog-only caches are re-probed immediately.
 - Routing's canonical `Gem` and `Cla` windows use the most consumed limit of
   their respective groups, so a full session cannot hide an exhausted week.
 - The displayed observation time is `quota.updatedAt`, never credential expiry.
-  Failed probes hide retained bars instead of presenting cached data as current.
+  Failed probes retain the last successful summary with an explicit stale label and muted bars; its observation time is not advanced.
 - Successful readings are cached for ten minutes. Failed probes are cached for
   30 seconds and retried while the page is open, stopping after recovery.
   Manual refresh bypasses the cache. Platforms render independently as their
   responses arrive.
+
+Successful AGY probes update memory and a debounced JSON snapshot at
+`provider-account-quota-cache.json` in the OpenCodex home directory. A restart
+loads that snapshot. Fresh summaries are reused for ten minutes; older ones
+are returned as stale while one background probe runs per account. Snapshots
+older than six hours are discarded. The page polls only AGY while a refresh is
+pending, then replaces the stale reading; failures retry after 30 seconds.
+With no usable cache, the account appears with an updating indicator instead
+of an invented quota. No credentials or emails are written to this snapshot.
 
 ## `ocx agy`
 

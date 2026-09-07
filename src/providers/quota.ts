@@ -62,6 +62,7 @@ import {
   reconcileKiroAccountUsageState,
 } from "./kiro-usage";
 import {
+  ACCOUNT_QUOTA_DISK_MAX_AGE_MS,
   cancelPendingAccountQuotaPersist,
   readPersistedAccountQuotas,
   schedulePersistAccountQuotas,
@@ -1883,6 +1884,10 @@ export interface ProviderAccountQuota {
   /** Set when the probe could not reach upstream (expired login, 429, network). */
   unavailable?: true;
   isCurrent?: () => boolean;
+  /** Last successful summary is older than its display TTL, or a refresh failed. */
+  stale?: true;
+  /** An account-scoped background probe is in flight. */
+  refreshing?: true;
 }
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
@@ -2004,6 +2009,8 @@ export function readPassiveProviderAccountQuotas(provider: string): ProviderAcco
 export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
   let removed = 0;
   for (const [key, entry] of accountQuotaCache) {
+    if (key.startsWith("google-antigravity\u0000") && entry.quota?.agyQuotaGroups
+      && now - entry.quota.updatedAt <= ACCOUNT_QUOTA_DISK_MAX_AGE_MS) continue;
     if (entry.ts + ACCOUNT_QUOTA_TTL_MS > now) continue;
     accountQuotaCache.delete(key);
     removed += 1;
@@ -2219,6 +2226,8 @@ async function fetchAccountQuota(
 ): Promise<AccountQuotaCacheEntry> {
   if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
+  if (provider === "google-antigravity") hydrateAccountQuotaCache();
+  const cacheEpoch = explicitAccountEpoch;
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
   const cached = accountQuotaCache.get(key);
@@ -2281,7 +2290,7 @@ async function fetchAccountQuota(
           ...(cached?.plan ? { plan: cached.plan } : plan ? { plan } : {}),
           unavailable: true,
         };
-        if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        if (cacheEpoch === explicitAccountEpoch && mayCommitAccountQuotaKey(key, writerGeneration)) {
           accountQuotaCache.set(key, entry);
           if (provider === "kiro") commitKiroAccountUsageState(key, null);
           sweepExpiredOnWrite(entry.ts);
@@ -2293,12 +2302,13 @@ async function fetchAccountQuota(
         quota,
         ...(plan ? { plan } : cached?.plan ? { plan: cached.plan } : {}),
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+      if (cacheEpoch === explicitAccountEpoch && mayCommitAccountQuotaKey(key, writerGeneration)) {
         accountQuotaCache.set(key, entry);
         // Exhaustion state rides the SAME commit guard as the quota row: a probe from a
         // superseded config generation must not publish either half.
         if (provider === "kiro") commitKiroAccountUsageState(key, kiroSnapshot);
         sweepExpiredOnWrite(entry.ts);
+        if (provider === "google-antigravity") persistAccountQuotaCache();
       }
       return entry;
     } catch {
@@ -2308,7 +2318,7 @@ async function fetchAccountQuota(
         ...(cached?.plan ? { plan: cached.plan } : {}),
         unavailable: true,
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+      if (cacheEpoch === explicitAccountEpoch && mayCommitAccountQuotaKey(key, writerGeneration)) {
         accountQuotaCache.set(key, entry);
         sweepExpiredOnWrite(entry.ts);
       }
@@ -2319,6 +2329,32 @@ async function fetchAccountQuota(
   });
   accountQuotaInflight.set(key, probe);
   return probe;
+}
+
+/** Dashboard stale-while-revalidate read. Only the live roster is exposed;
+ * successful summaries hydrate from disk and keep their observation time. */
+export function readAgyAccountQuotas(): ProviderAccountQuota[] {
+  hydrateAccountQuotaCache();
+  const provider = "google-antigravity";
+  const now = Date.now();
+  return (getAccountSet(provider)?.accounts ?? []).map(account => {
+    const key = accountCacheKey(provider, account.id);
+    const entry = accountQuotaCache.get(key);
+    const quota = entry?.quota?.agyQuotaGroups && now - entry.quota.updatedAt <= ACCOUNT_QUOTA_DISK_MAX_AGE_MS ? entry.quota : null;
+    const stale = !!quota && (entry?.unavailable === true || now - quota.updatedAt >= ACCOUNT_QUOTA_TTL_MS);
+    const invalidCatalog = !!entry?.quota && !entry.quota.agyQuotaGroups;
+    const retryDue = entry?.unavailable || invalidCatalog
+      ? now - entry.ts >= 30_000
+      : !quota || stale;
+    if (retryDue) void fetchAccountQuota(provider, account.id, false).catch(() => undefined);
+    return {
+      accountId: account.id,
+      quota,
+      ...(entry?.unavailable || invalidCatalog ? { unavailable: true as const } : {}),
+      ...(stale ? { stale: true as const } : {}),
+      ...(accountQuotaInflight.has(key) ? { refreshing: true as const } : {}),
+    };
+  });
 }
 
 /**

@@ -31,6 +31,8 @@ interface OAuthAccount {
   plan?: string;
   quota?: any;
   quotaUnavailable?: boolean;
+  quotaStale?: boolean;
+  quotaRefreshing?: boolean;
   expiresAt?: number;
   health?: { status?: string; message?: string };
 }
@@ -72,6 +74,8 @@ interface CodexAccountSummary {
     customWindows?: any[];
   } | null;
   quotaUnavailable?: boolean;
+  quotaStale?: boolean;
+  quotaRefreshing?: boolean;
 }
 
 type TabType = "all" | "antigravity" | "codex" | "grok" | "others";
@@ -305,10 +309,11 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
     };
   }, []);
 
-  const loadData = useCallback(async (opts?: { refresh?: boolean }) => {
+  const loadData = useCallback(async (opts?: { refresh?: boolean; agyOnly?: boolean }) => {
     const isRefresh = opts?.refresh === true;
+    const agyOnly = opts?.agyOnly === true;
     if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+    else if (!agyOnly) setLoading(true);
     // Request ordering: an older response must never overwrite a newer one.
     const loadSeq = (agyLoadSeq.current += 1);
 
@@ -316,22 +321,22 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
 
     try {
       // 1. Fetch Google Antigravity (AGY) accounts & quotas
-      const agyPromise = fetch(`${apiBase}/api/oauth/accounts?provider=google-antigravity${qs}`)
+      const agyPromise = fetch(`${apiBase}/api/oauth/accounts?provider=google-antigravity${qs}${isRefresh ? "" : "&cached=1"}`)
         .then(async r => (r.ok ? r.json() : null))
         .catch(() => null);
 
       // 2. Fetch Codex accounts & quotas
-      const codexPromise = fetch(`${apiBase}/api/codex-auth/accounts${isRefresh ? "?refresh=1" : ""}`)
+      const codexPromise = agyOnly ? Promise.resolve(null) : fetch(`${apiBase}/api/codex-auth/accounts${isRefresh ? "?refresh=1" : ""}`)
         .then(async r => (r.ok ? r.json() : null))
         .catch(() => null);
 
       // 3. Fetch xAI Grok accounts & quotas
-      const grokPromise = fetch(`${apiBase}/api/oauth/accounts?provider=xai${qs}`)
+      const grokPromise = agyOnly ? Promise.resolve(null) : fetch(`${apiBase}/api/oauth/accounts?provider=xai${qs}`)
         .then(async r => (r.ok ? r.json() : null))
         .catch(() => null);
 
       // 4. Fetch other supported OAuth providers (Anthropic, Kiro, Meta Muse)
-      const others = ["anthropic", "kiro", "meta-muse"];
+      const others = agyOnly ? [] : ["anthropic", "kiro", "meta-muse"];
       const otherPromises = others.map(async name => {
         const data = await fetch(`${apiBase}/api/oauth/accounts?provider=${name}${qs}`)
           .then(async r => (r.ok ? r.json() : null))
@@ -377,6 +382,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
 
         }),
         codexPromise.then(codexRes => {
+          if (agyOnly) return;
           if (!aliveRef.current || loadSeq !== agyLoadSeq.current) return;
 
           // Handle Codex
@@ -395,6 +401,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
 
         }),
         grokPromise.then(grokRes => {
+          if (agyOnly) return;
           if (!aliveRef.current || loadSeq !== agyLoadSeq.current) return;
 
           // Handle Grok
@@ -405,6 +412,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
 
         }),
         Promise.all(otherPromises).then(otherResults => {
+          if (agyOnly) return;
           if (!aliveRef.current || loadSeq !== agyLoadSeq.current) return;
 
           // Handle Other Providers
@@ -439,8 +447,10 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
   }, [loadData]);
 
   useEffect(() => {
-    if (loading || refreshing || !agyAccounts.some(account => account.quotaUnavailable)) return;
-    const timer = window.setTimeout(() => { void loadData(); }, 30_000);
+    if (loading || refreshing) return;
+    const pending = agyAccounts.some(account => account.quotaRefreshing);
+    if (!pending && !agyAccounts.some(account => account.quotaUnavailable || account.quotaStale)) return;
+    const timer = window.setTimeout(() => { void loadData({ agyOnly: true }); }, pending ? 2_000 : 30_000);
     return () => window.clearTimeout(timer);
   }, [agyAccounts, loading, refreshing, loadData]);
 
@@ -777,7 +787,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
               const renderQuotaModel = (model: (typeof agyQuota.buckets)[number]) => {
                 const remaining = agyRemaining(model.percent);
                 const resetText = formatAgyResetAt(model.resetAt);
-                const tone = remaining === null ? "green" : remaining > 70 ? "green" : remaining > 30 ? "amber" : "red";
+                const tone = agyQuota.status === "stale" ? "stale" : remaining === null ? "green" : remaining > 70 ? "green" : remaining > 30 ? "amber" : "red";
                 return (
                   <div key={model.bucketId} className="cockpit-quota-metric">
                     <div className="cockpit-metric-head">
@@ -834,7 +844,9 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                       <div style={{ fontSize: 12, color: "var(--muted)" }}>
                         <span>{t("subscriptions.agy.quota.scopeNote")}</span>
                       </div>
-                      {agyQuota.status === "ok" ? (
+                      {agyQuota.status === "stale" && <span className="agy-quota-stale-note">{t("subscriptions.agy.quota.stale")}</span>}
+                      {account.quotaRefreshing && <span role="status">{t("subscriptions.agy.quota.updating")}</span>}
+                      {agyQuota.status === "ok" || agyQuota.status === "stale" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           {agyQuota.buckets.map(renderQuotaModel)}
                         </div>
@@ -858,7 +870,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                       </div>
                       {account.quotaUnavailable === true && (
                         <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                          <span>{t("subscriptions.agy.quota.unavailableHint")}</span>
+                          <span>{t(agyQuota.status === "stale" ? "subscriptions.agy.quota.staleRetry" : "subscriptions.agy.quota.unavailableHint")}</span>
                         </div>
                       )}
                     </div>

@@ -2,10 +2,10 @@
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
  */
-import type { ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
+import type { ClientIdentityMode, ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
 import type { AccountQuota } from "../../codex-quota-utils";
 
-export type { ProviderSortMode, WorkspaceItem };
+export type { ClientIdentityMode, ProviderSortMode, WorkspaceItem };
 
 /** Rail status facets (all on by default). */
 export type StatusFilter = { ready: boolean; needsSetup: boolean; disabled: boolean };
@@ -120,6 +120,8 @@ export type ProviderUpdatePatch = {
   codexAccountMode?: "direct" | "pool";
   /** Management-only write that atomically owns the two supported xAI Grok adapter rows. */
   xaiResponsesOptIn?: boolean;
+  /** Header spoofing and passthrough policy for upstream gateway compatibility. */
+  clientIdentity?: ClientIdentityMode;
 };
 
 export type ProviderUpdateResult = {

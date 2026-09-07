@@ -1,6 +1,7 @@
-import type { AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
+import { resolveClientIdentityHeaders } from "./client-fingerprint";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -81,7 +82,11 @@ const CHAT_PASSTHROUGH_FIELDS = [
   "web_search_options",
 ] as const;
 
-function openAIChatTransport(provider: OcxProviderConfig): {
+function openAIChatTransport(
+  provider: OcxProviderConfig,
+  modelId?: string,
+  incomingHeaders?: Headers,
+): {
   url: string;
   headers: Record<string, string>;
   hasCredential: boolean;
@@ -90,9 +95,13 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
     throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
   }
+  const clientIdentityHeaders = modelId
+    ? resolveClientIdentityHeaders(provider, modelId, incomingHeaders)
+    : {};
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...agentRouterDefaultHeaders(provider.baseUrl, provider.headers),
+    ...clientIdentityHeaders,
   };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
@@ -112,8 +121,9 @@ export function buildOpenAIChatPassthroughRequest(
   stream: boolean,
   fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
   fastMode?: boolean,
+  incomingHeaders?: Headers,
 ): AdapterRequest {
-  const { url, headers, hasCredential } = openAIChatTransport(provider);
+  const { url, headers, hasCredential } = openAIChatTransport(provider, modelId, incomingHeaders);
 
   const body: Record<string, unknown> = {
     model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
@@ -1445,9 +1455,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     formatErrorBody: formatOpenAIChatErrorBody,
 
-    buildRequest(parsed: OcxParsedRequest) {
+    buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
-      const { url, headers, hasCredential } = openAIChatTransport(provider);
+      const { url, headers, hasCredential } = openAIChatTransport(provider, parsed.modelId, incoming?.headers);
       const messages = frameAgentRouterMessages(provider.baseUrl, messagesToChatFormat(parsed, provider));
       const tools = toolsToChatFormatForProvider(parsed, provider);
       const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);

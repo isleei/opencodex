@@ -3,6 +3,7 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../codex/forward-transport-headers";
+import { resolveClientIdentityHeaders } from "./client-fingerprint";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
@@ -2341,6 +2342,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           const base = provider.baseUrl.replace(/\/$/, "");
           url = `${base}${provider.responsesPath}`;
         }
+        const clientIdentityHeaders = resolveClientIdentityHeaders(provider, parsed.modelId, incoming?.headers);
+        Object.assign(headers, clientIdentityHeaders);
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }

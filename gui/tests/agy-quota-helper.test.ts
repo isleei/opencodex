@@ -20,7 +20,7 @@ test("legacy full catalog cache never becomes a full subscription", () => {
 test("failed, missing, partial, duplicate or malformed groups show no bars", () => {
   expect(resolveAgyQuota({}).buckets).toEqual([]);
   const failed = resolveAgyQuota({ quotaUnavailable: true, quota: { agyQuotaGroups: groups() } });
-  expect(failed.status).toBe("unavailable"); expect(failed.buckets).toEqual([]);
+  expect(failed.status).toBe("stale"); expect(failed.buckets).toHaveLength(4);
   const partial = groups().slice(0, 1);
   const duplicate = [groups()[0], groups()[0]];
   const malformed = groups(); malformed[0]!.windows[0]!.percent = NaN;

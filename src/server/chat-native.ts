@@ -190,6 +190,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     requestedStream,
     fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
     config.fastMode,
+    options.req.headers,
   );
   try {
     activeRequest = buildActiveRequest();

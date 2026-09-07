@@ -23,7 +23,7 @@ import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
-import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { CLAUDE_CODE_HEADERS, claudeCodeSessionId, resolveClientIdentityHeaders } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
@@ -1027,6 +1027,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
         headers["x-client-request-id"] = crypto.randomUUID();
       } else {
+        const clientIdentityHeaders = resolveClientIdentityHeaders(provider, parsed.modelId, incoming?.headers);
+        Object.assign(headers, clientIdentityHeaders);
         if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         else headers["x-api-key"] = provider.apiKey;
       }

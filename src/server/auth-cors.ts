@@ -812,6 +812,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelMaxOutputTokens: "editor",
   modelCosts: "editor",
   headers: "redacted",
+  clientIdentity: "editor",
   openRouterRouting: "editor",
   modelOpenRouterRouting: "editor",
   vercelGatewayRouting: "editor",

@@ -379,6 +379,17 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "clientIdentity")) {
+    const value = rawBody.clientIdentity;
+    if (value === null || value === "none" || value === "") {
+      delete next.clientIdentity;
+    } else if (value === "auto" || value === "passthrough" || value === "codex" || value === "claude-code" || value === "grok" || value === "agy") {
+      next.clientIdentity = value;
+    } else {
+      return { error: "clientIdentity must be auto, passthrough, codex, claude-code, grok, agy, or null/none" };
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "annotateEmptyToolOutputs")) {
     const value = rawBody.annotateEmptyToolOutputs;
     if (value === null) {
@@ -683,6 +694,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
+      clientIdentity: p.clientIdentity,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
       contextWindow: p.contextWindow,

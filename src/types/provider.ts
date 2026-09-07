@@ -165,11 +165,22 @@ export type TierDecision =
   | { readonly kind: "drop" }
   | { readonly kind: "set"; readonly value: string };
 
+export type ClientIdentityMode =
+  | "auto"
+  | "passthrough"
+  | "codex"
+  | "claude-code"
+  | "grok"
+  | "agy"
+  | "none";
+
 /**
  * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
 export interface OcxProviderConfig {
+  /** Optional client identity / header spoofing & passthrough policy. */
+  clientIdentity?: ClientIdentityMode;
   /** Optional short provider namespace used only at request/catalog presentation time. */
   alias?: string;
   /** Native model id -> short, slash-free request alias. */
