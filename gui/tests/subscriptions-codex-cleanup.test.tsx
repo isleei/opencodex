@@ -43,31 +43,6 @@ const CODEX_POOL = {
   },
 };
 
-// Mirrors the backend agyQuotaGroups shape: percents are USED%.
-const AGY_ACCOUNT = {
-  id: "agy-test-account",
-  email: "agy_user@example.com",
-  quota: {
-    updatedAt: Date.now() - 60000,
-    agyQuotaGroups: [
-      {
-        id: "gemini",
-        windows: [
-          { window: "weekly", percent: 24.46, resetAt: Date.now() + 86400 * 1000 },
-          { window: "5h", percent: 37.03, resetAt: Date.now() + 3600 * 1000 },
-        ],
-      },
-      {
-        id: "claude-gpt",
-        windows: [
-          { window: "weekly", percent: 0, resetAt: Date.now() + 86400 * 1000 },
-          { window: "5h", percent: 0, resetAt: Date.now() + 3600 * 1000 },
-        ],
-      },
-    ],
-  },
-};
-
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   originalFetch = globalThis.fetch;
@@ -92,12 +67,6 @@ beforeEach(() => {
       });
     }
     if (urlStr.includes("/api/oauth/accounts")) {
-      if (urlStr.includes("google-antigravity")) {
-        return new Response(JSON.stringify({ accounts: [AGY_ACCOUNT] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
       return new Response(JSON.stringify({ accounts: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -165,24 +134,4 @@ test("Codex subscriptions: does not render fake API service card, mock team name
   expect(text).toContain("5h 滚动限额");
   expect(text).toContain("Weekly 每周限额");
   expect(text).toContain("重置 1");
-
-  // 5. Codex cards show used% like the Providers page (fixture: 5h used 20%,
-  // weekly used 60%), not remaining% (80%/40%).
-  expect(text).toContain("20%");
-  expect(text).toContain("60%");
-  expect(text).not.toContain("80%");
-  expect(text).not.toContain("40%");
-});
-
-test("AGY subscriptions: shows used% matching the Providers page, not remaining%", async () => {
-  await mountSubscriptions();
-  const text = host.textContent || "";
-
-  // Fixture: gemini 5h used 37.03%, weekly used 24.46% — Providers shows "37%"/"24%".
-  expect(text).toContain("agy_user@example.com");
-  expect(text).toContain("37%");
-  expect(text).toContain("24%");
-  // Remaining-portrait values must be gone: 100-37.03=62.97, 100-24.46=75.54.
-  expect(text).not.toContain("62.97");
-  expect(text).not.toContain("75.54");
 });
