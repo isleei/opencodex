@@ -52,6 +52,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.protocolMessages",
   "provider.name.commandCodeAuth",
   "provider.name.commandCodeApi",
+  "provider.name.orcaRouterApi",
   "provider.name.volcengine",
   "provider.name.volcengineCodingPlan",
   "provider.name.volcengineAgentPlan",

@@ -1343,7 +1343,8 @@ function modelInputModalities(
     item.input_modalities
       ?? item.modalities
       ?? metadata?.input_modalities
-      ?? capabilityRecord?.input_modalities,
+      ?? capabilityRecord?.input_modalities
+      ?? plainRecord(item.architecture)?.input_modalities,
     8,
     24,
   )?.filter(value => (
