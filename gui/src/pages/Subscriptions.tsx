@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { useT, type TFn } from "../i18n/shared";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../i18n/shared";
 import {
   IconRefresh,
   IconTicket,
-  IconGrid,
-  IconList,
-  IconSearch,
   IconCopy,
   IconPlay,
   IconInfo,
@@ -76,8 +73,6 @@ interface CodexAccountSummary {
   quotaRefreshing?: boolean;
 }
 
-type TabType = "all" | "antigravity" | "codex" | "grok" | "others";
-
 function formatResetCountdown(resetAt?: number): string {
   if (!resetAt) return "已重置";
   const now = Date.now();
@@ -100,10 +95,6 @@ function formatCardDate(timestamp?: number): string {
   if (!timestamp) return new Date().toLocaleDateString();
   const d = new Date(timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp);
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function agyStatusLabel(t: TFn, status: AgySyncStatusCode): string {
-  return t(`subscriptions.agy.status.${status}`);
 }
 
 interface AgyLastSwitch {
@@ -160,99 +151,6 @@ function agySnapshotContradicts(lastSwitch: AgyLastSwitch, snapshot: AgySyncSnap
   return false;
 }
 
-/** Per-target AGY sync state: proxy account vs this host's CLI files vs IDE. Never derives "synced" from the proxy alone. */
-function AgySyncStatusPanel(props: {
-  t: TFn;
-  activeId: string | null;
-  accounts: OAuthAccount[];
-  snapshot: AgySyncSnapshot | null;
-  lastSwitch: {
-    accountId: string;
-    ok: boolean;
-    code?: string;
-    message?: string;
-    cli?: AgyTargetState;
-    ide?: AgyTargetState;
-    requestSeq: number;
-  } | null;
-  switching: boolean;
-  onRetry: () => void;
-}): ReactElement | null {
-  const { t, activeId, accounts, snapshot, lastSwitch, switching, onRetry } = props;
-  if (accounts.length === 0) return null;
-  const active = accounts.find(a => a.id === activeId);
-  const activeName = active ? active.email || active.alias || displayAccountId(active.id) : t("subscriptions.agy.noActiveAccount");
-
-  let cliStatus: AgySyncStatusCode = "unknown";
-  // The freshest write outcome wins, but ONLY for the currently active proxy
-  // account: after another client switches accounts, a stale lastSwitch must
-  // not render old synced results next to the new proxy account.
-  const switchFresh = lastSwitch !== null && lastSwitch.accountId === activeId;
-  if (switchFresh && lastSwitch?.cli) {
-    cliStatus = lastSwitch.cli.status;
-  } else if (snapshot?.cli) {
-    const file = snapshot.cli.matchesActive;
-    const key = snapshot.cli.keyringMatchesActive;
-    if (file === false || key === false) cliStatus = "failed";
-    else if (file === true && (key === true || snapshot.nativeKeyring === "unsupported")) cliStatus = "synced";
-    else if (file === true || key === true) cliStatus = "unknown";
-  }
-  let ideStatus: AgySyncStatusCode = "unknown";
-  if (switchFresh && lastSwitch?.ide) {
-    ideStatus = lastSwitch.ide.status;
-  } else if (snapshot?.ide) {
-    if (snapshot.ide.installed === false) ideStatus = "not_installed";
-    // A running IDE alone never means synced — only a decoded credential
-    // match counts. Even a disk match is only pending_restart: a SQLite
-    // write is not runtime activation, and there is no programmatic
-    // runtime-identity API. `synced` is reserved for the verified
-    // activation path (normal restart + operator-confirmed IDE account UI).
-    else if (snapshot.ide.credentialMatchesActive === false) ideStatus = "failed";
-    else if (snapshot.ide.credentialMatchesActive === true) {
-      ideStatus = "pending_restart";
-    } else if (snapshot.ide.running === true) ideStatus = "pending_restart";
-  }
-
-  const showRetry = activeId !== null && (
-    (lastSwitch && !lastSwitch.ok && (lastSwitch.cli?.retryable !== false || lastSwitch.ide?.retryable === true)) ||
-    snapshot?.cli?.matchesActive === false ||
-    snapshot?.cli?.keyringMatchesActive === false ||
-    ideStatus === "pending_restart" ||
-    ideStatus === "unknown"
-  );
-
-  return (
-    <div className="cockpit-grok-notice" aria-live="polite">
-      <div className="cockpit-grok-notice-title">
-        <IconInfo style={{ width: 15, height: 15 }} />
-        <span>{t("subscriptions.agy.syncPanelTitle")}</span>
-      </div>
-      <ul>
-        <li>{t("subscriptions.agy.rowProxy", { account: activeName })}</li>
-        <li>{t("subscriptions.agy.rowCli", { status: agyStatusLabel(t, cliStatus) })}</li>
-        <li>{t("subscriptions.agy.rowIde", { status: agyStatusLabel(t, ideStatus) })}</li>
-      </ul>
-      {lastSwitch?.message && (
-        <div>{lastSwitch.message}</div>
-      )}
-      <div>{t("subscriptions.agy.proxyHostNote")}</div>
-      {cliStatus === "synced" && <div>{t("subscriptions.agy.nativeKeyringNote")}</div>}
-      <div>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          disabled={switching || !showRetry}
-          onClick={onRetry}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-        >
-          <IconRefresh className={switching ? "sub-spin" : ""} style={{ width: 14, height: 14 }} aria-hidden="true" />
-          {t("subscriptions.agy.retrySync")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function Subscriptions({ apiBase }: { apiBase: string }) {
   const t = useT();
   const aliveRef = useRef(true);
@@ -262,17 +160,12 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
-  // Tabs & Filters
-  const [activeTab, setActiveTab] = useState<TabType>("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-
   // AGY state
   const [agyAccounts, setAgyAccounts] = useState<OAuthAccount[]>([]);
   const [agyActiveId, setAgyActiveId] = useState<string | null>(null);
   const [switchingAgyId, setSwitchingAgyId] = useState<string | null>(null);
-  const [agySync, setAgySync] = useState<AgySyncSnapshot | null>(null);
-  const [agyLastSwitch, setAgyLastSwitch] = useState<AgyLastSwitch | null>(null);
+  const [, setAgySync] = useState<AgySyncSnapshot | null>(null);
+  const [, setAgyLastSwitch] = useState<AgyLastSwitch | null>(null);
   const agyRequestSeq = useRef(0);
   const agyLoadSeq = useRef(0);
   // Ref mirror so loadData can reconcile the historical outcome against a
@@ -370,7 +263,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                   tone: "err",
                   text: t("subscriptions.agy.switchPartial", {
                     target: "CLI/IDE",
-                    detail: "fresh proxy-host state disagrees with the last switch result — see the sync panel and retry if needed",
+                    detail: "fresh proxy-host state disagrees with the last switch result — retry the switch if needed",
                   }),
                 });
               }
@@ -533,12 +426,6 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
     }
   };
 
-  // Retry the sync for the proxy's current active account (no account change).
-  const handleRetryAgySync = async () => {
-    if (switchingAgyId || !agyActiveId) return;
-    await handleSwitchAgy(agyActiveId);
-  };
-
   // Switch Grok active account
   const handleSwitchGrok = async (accountId: string) => {
     if (switchingGrokId || accountId === grokActiveId) return;
@@ -576,27 +463,14 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
     }
   };
 
-  // Filtering accounts by search term
-  const filterMatch = (item: { email?: string; alias?: string; id?: string; label?: string }) => {
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      (item.email && item.email.toLowerCase().includes(term)) ||
-      (item.alias && item.alias.toLowerCase().includes(term)) ||
-      (item.label && item.label.toLowerCase().includes(term)) ||
-      (item.id && item.id.toLowerCase().includes(term))
-    );
-  };
-
-  const filteredAgy = useMemo(() => agyAccounts.filter(filterMatch), [agyAccounts, searchTerm]);
-  const filteredCodexMain = useMemo(() => (codexMain && filterMatch(codexMain) ? codexMain : null), [codexMain, searchTerm]);
-  const filteredCodexPool = useMemo(() => codexPool.filter(filterMatch), [codexPool, searchTerm]);
-  const filteredGrok = useMemo(() => grokAccounts.filter(filterMatch), [grokAccounts, searchTerm]);
+  const filteredAgy = agyAccounts;
+  const filteredCodexMain = codexMain;
+  const filteredCodexPool = codexPool;
+  const filteredGrok = grokAccounts;
 
   // Counts
   const totalCodexCount = (codexMain ? 1 : 0) + codexPool.length;
   const totalOthersCount = otherProviders.reduce((acc, p) => acc + p.accounts.length, 0);
-  const totalAccountsCount = agyAccounts.length + totalCodexCount + grokAccounts.length + totalOthersCount;
 
   return (
     <div className="sub-shell">
@@ -651,103 +525,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
           </button>
         </div>
       )}
-
-      {/* Category Tabs (Cockpit category switcher) */}
-      <div className="sub-tabs-strip">
-        <button
-          type="button"
-          className={`sub-tab-item ${activeTab === "all" ? "active" : ""}`}
-          onClick={() => setActiveTab("all")}
-        >
-          全部平台
-          <span className="sub-tab-badge">{totalAccountsCount}</span>
-        </button>
-        <button
-          type="button"
-          className={`sub-tab-item ${activeTab === "antigravity" ? "active" : ""}`}
-          onClick={() => setActiveTab("antigravity")}
-        >
-          {providerIconSrc("google-antigravity") && (
-            <img src={providerIconSrc("google-antigravity")} alt="AGY" style={{ width: 15, height: 15 }} />
-          )}
-          Antigravity
-          <span className="sub-tab-badge">{agyAccounts.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`sub-tab-item ${activeTab === "codex" ? "active" : ""}`}
-          onClick={() => setActiveTab("codex")}
-        >
-          {providerIconSrc("openai") && (
-            <img src={providerIconSrc("openai")} alt="Codex" style={{ width: 15, height: 15 }} />
-          )}
-          Codex
-          <span className="sub-tab-badge">{totalCodexCount}</span>
-        </button>
-        <button
-          type="button"
-          className={`sub-tab-item ${activeTab === "grok" ? "active" : ""}`}
-          onClick={() => setActiveTab("grok")}
-        >
-          {providerIconSrc("xai") && (
-            <img src={providerIconSrc("xai")} alt="Grok" style={{ width: 15, height: 15 }} />
-          )}
-          Grok CLI
-          <span className="sub-tab-badge">{grokAccounts.length}</span>
-        </button>
-        {otherProviders.length > 0 && (
-          <button
-            type="button"
-            className={`sub-tab-item ${activeTab === "others" ? "active" : ""}`}
-            onClick={() => setActiveTab("others")}
-          >
-            更多平台
-            <span className="sub-tab-badge">{totalOthersCount}</span>
-          </button>
-        )}
-      </div>
-
-      {/* Cockpit Toolbar */}
-      <div className="sub-toolbar">
-        <div className="sub-toolbar-left">
-          <div className="sub-search-wrap">
-            <IconSearch className="sub-search-icon" />
-            <input
-              type="text"
-              className="sub-search-input"
-              placeholder="搜索账号..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-
-          <div className="sub-view-toggle">
-            <button
-              type="button"
-              className={`sub-view-btn ${viewMode === "grid" ? "active" : ""}`}
-              onClick={() => setViewMode("grid")}
-              title="网格视图"
-            >
-              <IconGrid style={{ width: 15, height: 15 }} />
-            </button>
-            <button
-              type="button"
-              className={`sub-view-btn ${viewMode === "list" ? "active" : ""}`}
-              onClick={() => setViewMode("list")}
-              title="列表视图"
-            >
-              <IconList style={{ width: 15, height: 15 }} />
-            </button>
-          </div>
-
-          <span className="sub-pill-badge">
-            全部 ({activeTab === "antigravity" ? filteredAgy.length : activeTab === "codex" ? (filteredCodexMain ? 1 : 0) + filteredCodexPool.length : activeTab === "grok" ? filteredGrok.length : totalAccountsCount})
-          </span>
-        </div>
-      </div>
-
       {/* SECTION 1: Google Antigravity (AGY) Dual-Column Matrix */}
-      {(activeTab === "all" || activeTab === "antigravity") && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -761,17 +539,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             </div>
           </div>
 
-          <AgySyncStatusPanel
-            t={t}
-            activeId={agyActiveId}
-            accounts={agyAccounts}
-            snapshot={agySync}
-            lastSwitch={agyLastSwitch}
-            switching={switchingAgyId !== null}
-            onRetry={() => void handleRetryAgySync()}
-          />
-
-          <div className={`cockpit-grid ${viewMode === "list" ? "cockpit-list" : ""}`}>
+          <div className="cockpit-grid">
             {filteredAgy.map(account => {
               const isActive = account.id === agyActiveId;
               const isSwitching = switchingAgyId === account.id;
@@ -924,10 +692,8 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             })}
           </div>
         </section>
-      )}
 
       {/* SECTION 2: OpenAI Codex Subscription */}
-      {(activeTab === "all" || activeTab === "codex") && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {providerIconSrc("openai") && (
@@ -1123,10 +889,8 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             })}
           </div>
         </section>
-      )}
 
       {/* SECTION 3: xAI Grok CLI Subscription */}
-      {(activeTab === "all" || activeTab === "grok") && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {providerIconSrc("xai") && (
@@ -1138,22 +902,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             <span className="badge badge-muted text-caption">{grokAccounts.length} Account</span>
           </div>
 
-          {/* Grok CLI Explanation Notice Banner (Screenshot 3) */}
-          <div className="cockpit-grok-notice">
-            <div className="cockpit-grok-notice-title">
-              <IconInfo style={{ width: 15, height: 15 }} />
-              <span>Grok CLI 账号管理说明</span>
-            </div>
-            <div>
-              默认使用独立 GROK_HOME；开启“切号同步官方登录”后，默认实例切换 OAuth 账号会写入官方 ~/.grok/auth.json。
-            </div>
-            <ul>
-              <li>本地范围：可读取默认 ~/.grok/auth.json 用于导入；仅在开关开启且默认实例切换 OAuth 账号时写入该文件。</li>
-              <li>网络范围：OAuth 授权、凭据刷新及账号用量查询；不会上传凭据到云端服务。</li>
-            </ul>
-          </div>
-
-          <div className={`cockpit-grid ${viewMode === "list" ? "cockpit-list" : ""}`}>
+          <div className="cockpit-grid">
             {filteredGrok.map(account => {
               const isActive = account.id === grokActiveId || account.active;
               const label = account.email || account.alias || displayAccountId(account.id);
@@ -1245,10 +994,9 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             })}
           </div>
         </section>
-      )}
 
       {/* SECTION 4: Other Connected Providers */}
-      {(activeTab === "all" || activeTab === "others") && otherProviders.length > 0 && (
+      {otherProviders.length > 0 && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
@@ -1259,9 +1007,9 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
             </span>
           </div>
 
-          <div className={`cockpit-grid ${viewMode === "list" ? "cockpit-list" : ""}`}>
+          <div className="cockpit-grid">
             {otherProviders.flatMap(p =>
-              p.accounts.filter(filterMatch).map(account => {
+              p.accounts.map(account => {
                 const isActive = account.id === p.activeId || account.active;
                 const label = account.email || account.alias || displayAccountId(account.id);
                 return (

@@ -73,155 +73,6 @@
   background: rgba(0, 0, 0, 0.05);
 }
 
-/* Platform Tabs (Cockpit category switcher) */
-.sub-tabs-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sub-tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-
-.sub-tab-item:hover {
-  background: var(--surface);
-  color: var(--foreground);
-}
-
-.sub-tab-item.active {
-  background: var(--surface);
-  color: var(--primary);
-  border-color: var(--border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.sub-tab-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--border);
-  color: var(--foreground);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 10px;
-  line-height: 1.2;
-}
-
-.sub-tab-item.active .sub-tab-badge {
-  background: var(--primary);
-  color: #fff;
-}
-
-/* Cockpit Toolbar */
-.sub-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px;
-}
-
-.sub-toolbar-left {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  flex: 1;
-}
-
-.sub-search-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  min-width: 220px;
-  max-width: 320px;
-  flex: 1;
-}
-
-.sub-search-icon {
-  position: absolute;
-  left: 10px;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.sub-search-input {
-  width: 100%;
-  padding: 6px 10px 6px 30px;
-  font-size: 13px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: var(--foreground);
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.sub-search-input:focus {
-  border-color: var(--primary);
-}
-
-.sub-view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--background);
-}
-
-.sub-view-btn {
-  padding: 6px 10px;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.sub-view-btn.active {
-  background: var(--primary);
-  color: #fff;
-}
-
-.sub-pill-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: var(--foreground);
-}
-
 /* Cockpit Badges */
 .cockpit-badge-active {
   display: inline-flex;
@@ -290,12 +141,8 @@
 /* Cockpit Grid & Cards */
 .cockpit-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
-  gap: 16px;
-}
-
-.cockpit-grid.cockpit-list {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
 }
 
 .cockpit-card {
@@ -303,11 +150,11 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 14px;
+  gap: 8px;
   position: relative;
   transition: all 0.18s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
@@ -376,10 +223,10 @@
   background: var(--background);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 12px 14px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .cockpit-dual-columns {
@@ -438,9 +285,9 @@
 }
 
 .cockpit-progress-bg {
-  height: 6px;
+  height: 4px;
   background: var(--border);
-  border-radius: 3px;
+  border-radius: 2px;
   overflow: hidden;
   position: relative;
 }
@@ -524,39 +371,6 @@
 .cockpit-icon-btn.primary:hover {
   background: rgba(59, 130, 246, 0.1);
   border-color: rgba(59, 130, 246, 0.3);
-}
-
-/* Grok Notice Banner */
-.cockpit-grok-notice {
-  background: rgba(59, 130, 246, 0.06);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--foreground);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.cockpit-grok-notice-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  color: #2563eb;
-  font-size: 13px;
-}
-
-.dark .cockpit-grok-notice-title {
-  color: #60a5fa;
-}
-
-.cockpit-grok-notice ul {
-  margin: 4px 0 0 16px;
-  padding: 0;
-  color: var(--muted);
 }
 
 /* Animation */
