@@ -106,6 +106,11 @@ function agyStatusLabel(t: TFn, status: AgySyncStatusCode): string {
   return t(`subscriptions.agy.status.${status}`);
 }
 
+/** Cockpit tone for a USED% value, mirroring Providers (QuotaBars threshold={80}). */
+function usedTone(percent: number): "green" | "amber" | "red" {
+  return isQuotaExhausted(percent) ? "red" : isQuotaWarn(percent, 80) ? "amber" : "green";
+}
+
 interface AgyLastSwitch {
   accountId: string;
   ok: boolean;
@@ -788,7 +793,7 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                   ? model.percent
                   : null;
                 const resetText = formatAgyResetAt(model.resetAt);
-                const tone = agyQuota.status === "stale" ? "stale" : used === null ? "green" : isQuotaExhausted(used) ? "red" : isQuotaWarn(used, 80) ? "amber" : "green";
+                const tone = agyQuota.status === "stale" ? "stale" : used === null ? "green" : usedTone(used);
                 return (
                   <div key={model.bucketId} className="cockpit-quota-metric">
                     <div className="cockpit-metric-head">
@@ -982,14 +987,14 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                     <div className="cockpit-quota-metric">
                       <div className="cockpit-metric-head">
                         <span className="cockpit-metric-label">5h 滚动限额</span>
-                        <span className="cockpit-metric-val green">
-                          {100 - (filteredCodexMain.quota?.shortPercent ?? 0)}%
+                        <span className={`cockpit-metric-val ${usedTone(filteredCodexMain.quota?.shortPercent ?? 0)}`}>
+                          {t("quota.usedPercent", { pct: Math.round(filteredCodexMain.quota?.shortPercent ?? 0) })}
                         </span>
                       </div>
                       <div className="cockpit-progress-bg">
                         <div
-                          className="cockpit-progress-fill green"
-                          style={{ width: `${100 - (filteredCodexMain.quota?.shortPercent ?? 0)}%` }}
+                          className={`cockpit-progress-fill ${usedTone(filteredCodexMain.quota?.shortPercent ?? 0)}`}
+                          style={{ width: `${Math.round(filteredCodexMain.quota?.shortPercent ?? 0)}%` }}
                         />
                       </div>
                       <span className="cockpit-metric-time">
@@ -1000,14 +1005,14 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                     <div className="cockpit-quota-metric" style={{ marginTop: 6 }}>
                       <div className="cockpit-metric-head">
                         <span className="cockpit-metric-label">Weekly 每周限额</span>
-                        <span className="cockpit-metric-val green">
-                          {100 - (filteredCodexMain.quota?.weeklyPercent ?? 0)}%
+                        <span className={`cockpit-metric-val ${usedTone(filteredCodexMain.quota?.weeklyPercent ?? 0)}`}>
+                          {t("quota.usedPercent", { pct: Math.round(filteredCodexMain.quota?.weeklyPercent ?? 0) })}
                         </span>
                       </div>
                       <div className="cockpit-progress-bg">
                         <div
-                          className="cockpit-progress-fill green"
-                          style={{ width: `${100 - (filteredCodexMain.quota?.weeklyPercent ?? 0)}%` }}
+                          className={`cockpit-progress-fill ${usedTone(filteredCodexMain.quota?.weeklyPercent ?? 0)}`}
+                          style={{ width: `${Math.round(filteredCodexMain.quota?.weeklyPercent ?? 0)}%` }}
                         />
                       </div>
                       <span className="cockpit-metric-time">
@@ -1043,8 +1048,8 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
 
             {/* Additional Pool Accounts */}
             {filteredCodexPool.map(acc => {
-              const shortRem = 100 - (acc.quota?.shortPercent ?? 0);
-              const weekRem = 100 - (acc.quota?.weeklyPercent ?? 0);
+              const shortUsed = Math.round(acc.quota?.shortPercent ?? 0);
+              const weekUsed = Math.round(acc.quota?.weeklyPercent ?? 0);
               return (
                 <div key={acc.id} className="cockpit-card">
                   <div>
@@ -1080,10 +1085,10 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                       <div className="cockpit-quota-metric">
                         <div className="cockpit-metric-head">
                           <span className="cockpit-metric-label">5h 限额</span>
-                          <span className="cockpit-metric-val green">{shortRem}%</span>
+                          <span className={`cockpit-metric-val ${usedTone(shortUsed)}`}>{t("quota.usedPercent", { pct: shortUsed })}</span>
                         </div>
                         <div className="cockpit-progress-bg">
-                          <div className="cockpit-progress-fill green" style={{ width: `${shortRem}%` }} />
+                          <div className={`cockpit-progress-fill ${usedTone(shortUsed)}`} style={{ width: `${shortUsed}%` }} />
                         </div>
                         <span className="cockpit-metric-time">{formatResetCountdown(acc.quota?.shortResetAt)}</span>
                       </div>
@@ -1091,10 +1096,10 @@ export default function Subscriptions({ apiBase }: { apiBase: string }) {
                       <div className="cockpit-quota-metric" style={{ marginTop: 6 }}>
                         <div className="cockpit-metric-head">
                           <span className="cockpit-metric-label">Weekly 限额</span>
-                          <span className="cockpit-metric-val green">{weekRem}%</span>
+                          <span className={`cockpit-metric-val ${usedTone(weekUsed)}`}>{t("quota.usedPercent", { pct: weekUsed })}</span>
                         </div>
                         <div className="cockpit-progress-bg">
-                          <div className="cockpit-progress-fill green" style={{ width: `${weekRem}%` }} />
+                          <div className={`cockpit-progress-fill ${usedTone(weekUsed)}`} style={{ width: `${weekUsed}%` }} />
                         </div>
                         <span className="cockpit-metric-time">{formatResetCountdown(acc.quota?.weeklyResetAt)}</span>
                       </div>

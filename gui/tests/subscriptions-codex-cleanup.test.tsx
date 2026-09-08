@@ -165,6 +165,13 @@ test("Codex subscriptions: does not render fake API service card, mock team name
   expect(text).toContain("5h 滚动限额");
   expect(text).toContain("Weekly 每周限额");
   expect(text).toContain("重置 1");
+
+  // 5. Codex cards show used% like the Providers page (fixture: 5h used 20%,
+  // weekly used 60%), not remaining% (80%/40%).
+  expect(text).toContain("20%");
+  expect(text).toContain("60%");
+  expect(text).not.toContain("80%");
+  expect(text).not.toContain("40%");
 });
 
 test("AGY subscriptions: shows used% matching the Providers page, not remaining%", async () => {
