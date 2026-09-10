@@ -101,6 +101,8 @@ export type {
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,
   TransientRetryPolicy,
+  ProviderWebSearchBridgeBackend,
+  ProviderWebSearchBridgeConfig,
   ProviderCostOverlay,
   RequestPacingRule,
   ProviderRequestPacingConfig,
@@ -111,6 +113,8 @@ export type {
   ClientIdentityMode,
   OcxProviderConfig,
 } from "./types/provider";
+
+export { PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";
 
 export type {
   CodexAccount,

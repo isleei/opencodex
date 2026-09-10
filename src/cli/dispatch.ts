@@ -858,8 +858,8 @@ const commandRunners: Record<string, CommandRunner> = {
   acp: async deps => {
     const { runAcpCli } = await import("../acp/agent");
     // Foreground agent loop: blocks until the editor disconnects.
-    await runAcpCli(deps.args.slice(1));
-    return 0;
+    // Failures throw; a clean disconnect is success.
+    return runAcpCli(deps.args.slice(1)).then(() => 0);
   },
   workflow: async deps => {
     const { handleWorkflowCommand } = await import("./workflow");
