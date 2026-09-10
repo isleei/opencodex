@@ -1409,9 +1409,14 @@ function usageFromOpenAIChat(usage: Record<string, unknown> | undefined): OcxUsa
 }
 
 function resolveMaxTokens(provider: OcxProviderConfig, parsed: OcxParsedRequest): number | undefined {
-  return parsed.options.maxOutputTokens
-    ?? modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
+  const requested = parsed.options.maxOutputTokens;
+  const cap = modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
     ?? provider.defaultMaxOutputTokens;
+  // An operator-configured ceiling is authoritative: forwarding a caller value above it
+  // 400s on upstreams that enforce their own output limit (e.g. GLM-class models capped
+  // at 131072), so clamp instead of passing the over-limit value through untouched.
+  if (requested !== undefined && cap !== undefined) return Math.min(requested, cap);
+  return requested ?? cap;
 }
 
 function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: string, maxOutputTokens?: number): number | undefined {

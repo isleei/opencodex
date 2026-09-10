@@ -4433,3 +4433,56 @@ describe("raw usage passthrough on the forward path (#41980 parity, #37138 adjac
     }
   });
 });
+
+describe("responses max_output_tokens operator ceiling", () => {
+  const keyed = {
+    adapter: "openai-responses",
+    baseUrl: "https://example.test/v1",
+    authMode: "key" as const,
+    apiKey: "sk-test",
+  };
+  const wireOf = (body: Record<string, unknown>, provider: Record<string, unknown> = keyed) =>
+    JSON.parse(createResponsesPassthroughAdapter(provider as never).buildRequest(parseRequest(body)).body);
+
+  test("clamps a caller value above the model ceiling instead of 400ing upstream", () => {
+    const wire = wireOf(
+      { model: "glm-5.3-flash", input: "hi", max_output_tokens: 262_144 },
+      { ...keyed, modelMaxOutputTokens: { "glm-5.3-flash": 131_072 } },
+    );
+
+    expect(wire.max_output_tokens).toBe(131_072);
+  });
+
+  test("clamps to the provider default when no model entry matches", () => {
+    const wire = wireOf(
+      { model: "glm-5.3-flash", input: "hi", max_output_tokens: 200_000 },
+      { ...keyed, defaultMaxOutputTokens: 131_072 },
+    );
+
+    expect(wire.max_output_tokens).toBe(131_072);
+  });
+
+  test("passes a below-ceiling caller value through untouched", () => {
+    const wire = wireOf(
+      { model: "glm-5.3-flash", input: "hi", max_output_tokens: 8_000 },
+      { ...keyed, modelMaxOutputTokens: { "glm-5.3-flash": 131_072 } },
+    );
+
+    expect(wire.max_output_tokens).toBe(8_000);
+  });
+
+  test("passes an over-limit caller value through when no ceiling is configured", () => {
+    const wire = wireOf({ model: "glm-5.3-flash", input: "hi", max_output_tokens: 262_144 });
+
+    expect(wire.max_output_tokens).toBe(262_144);
+  });
+
+  test("an omitted value stays omitted even with a ceiling configured", () => {
+    const wire = wireOf(
+      { model: "glm-5.3-flash", input: "hi" },
+      { ...keyed, modelMaxOutputTokens: { "glm-5.3-flash": 131_072 } },
+    );
+
+    expect(wire).not.toHaveProperty("max_output_tokens");
+  });
+});

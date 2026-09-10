@@ -453,9 +453,12 @@ catalog/request tier metadata may use `priority`. Do not collapse these spelling
 ## Provider output defaults
 
 `OcxProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
-not context-window metadata. They are applied only when a Responses request omits
-`max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
-the provider default, then the adapter omits `max_tokens`.
+not context-window metadata. When a Responses request omits `max_output_tokens`, a model-specific
+configured value wins, then the provider default, then the adapter omits `max_tokens`. When the
+request carries an explicit value, a configured ceiling still clamps it (`min(requested, ceiling)`):
+forwarding an over-limit value 400s on upstreams enforcing their own output limit (e.g. GLM-class
+models at 131072). With no ceiling configured, an explicit value passes through untouched and the
+upstream remains the authority on its own limit.
 
 Both fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,

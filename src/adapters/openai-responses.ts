@@ -1441,6 +1441,22 @@ function stripUnsupportedForwardParams(body: unknown): unknown {
   return rest;
 }
 
+/**
+ * Clamp a caller-supplied `max_output_tokens` to the operator-configured output ceiling
+ * (`modelMaxOutputTokens` / `defaultMaxOutputTokens`). Same rationale as the openai-chat
+ * `max_tokens` clamp: an over-limit value 400s on upstreams enforcing their own output
+ * limit (e.g. GLM-class models at 131072). No-op when the body carries no numeric value
+ * or no ceiling is configured, so unconfigured routes keep pure passthrough.
+ */
+function clampResponsesMaxOutputTokens(body: unknown, provider: OcxProviderConfig, modelId: string): unknown {
+  if (!isPlainObject(body)) return body;
+  const requested = body.max_output_tokens;
+  if (typeof requested !== "number") return body;
+  const cap = modelRecordValue(provider.modelMaxOutputTokens, modelId) ?? provider.defaultMaxOutputTokens;
+  if (cap === undefined || !(requested > cap)) return body;
+  return { ...body, max_output_tokens: cap };
+}
+
 /** Return the lossless text represented by one system message, or null when it is multimodal. */
 function canonicalForwardSystemText(item: Record<string, unknown>): string | null {
   const content = item.content;
@@ -2501,7 +2517,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ),
         isXaiSchemaTarget(provider),
       );
-      const finalBody = stripDisabledVerbosity(
+      const finalBody = clampResponsesMaxOutputTokens(stripDisabledVerbosity(
         stripDisabledReasoningSummaries(
           normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
           provider,
@@ -2509,7 +2525,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ),
         provider,
         parsed.modelId,
-      );
+      ), provider, parsed.modelId);
       if (isCanonicalOpenAiForwardProvider(provider)) {
         // Spark closes Responses Lite streams before a terminal completion. Select compatibility
         // from the final wire model so aliases cannot leave the caller or a static header enabled.

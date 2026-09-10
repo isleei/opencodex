@@ -920,6 +920,36 @@ describe("openai-chat max output defaults", () => {
     expect(body.max_tokens).toBe(8_000);
   });
 
+  test("explicit request above the model ceiling clamps instead of 400ing upstream", () => {
+    // dt/glm-5.3-flash class: the caller asks for more than the upstream output limit
+    // (131072 for GLM-class models) and the gateway rejects the raw value.
+    const req = parsed();
+    req.options.maxOutputTokens = 262_144;
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      modelMaxOutputTokens: { "test-model": 131_072 },
+    })).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(131_072);
+  });
+
+  test("explicit request above the provider default clamps to the default", () => {
+    const req = parsed();
+    req.options.maxOutputTokens = 200_000;
+    const body = JSON.parse(createOpenAIChatAdapter(provider({
+      defaultMaxOutputTokens: 131_072,
+    })).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(131_072);
+  });
+
+  test("explicit request without any configured ceiling passes through untouched", () => {
+    const req = parsed();
+    req.options.maxOutputTokens = 262_144;
+    const body = JSON.parse(createOpenAIChatAdapter(provider()).buildRequest(req).body);
+
+    expect(body.max_tokens).toBe(262_144);
+  });
+
   test("thinking-budget models size thinking_budget from the effective default budget", () => {
     const body = JSON.parse(createOpenAIChatAdapter(provider({
       defaultMaxOutputTokens: 20_000,
