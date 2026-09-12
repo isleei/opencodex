@@ -111,7 +111,7 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
+import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -152,12 +152,13 @@ import {
   decodeRequestErrorResponse,
   handleResponses,
   preAuthUpstreamHostCircuitKey,
+  poolCredentialRefreshIncompleteResponse,
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
-import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
@@ -317,6 +318,13 @@ async function refreshPoolCompactContext(args: {
   authCtx: CodexAuthContext & { kind: "pool" };
   provider: OcxProviderConfig;
   codexAccountMode?: CodexAccountMode;
+  /**
+   * Public selector for the account this refresh is for, when the request carried one. The
+   * caller has it and this function does not, because compact takes no `RouteResult` — which
+   * is the whole reason the refusal here used to be less specific than the one core returns
+   * for the identical failure.
+   */
+  codexAccountNamespace?: string;
   substituteMainCredential: boolean;
   options: HandleResponsesCompactOptions;
 }): Promise<
@@ -377,14 +385,15 @@ async function refreshPoolCompactContext(args: {
     if (isTerminalCompactPoolRefreshFailure(error)) {
       return { ok: false, quarantine: true, response: reauthResponse() };
     }
-    const response = formatErrorResponse(
-      503,
-      "server_busy",
-      "Codex credential refresh did not complete; retry this request",
-    );
-    const headers = new Headers(response.headers);
-    headers.set("Retry-After", "1");
-    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
+    return {
+      ok: false,
+      quarantine: false,
+      response: poolCredentialRefreshIncompleteResponse({
+        authCtx,
+        config,
+        accountSelector: args.codexAccountNamespace,
+      }),
+    };
   }
 }
 
@@ -734,6 +743,13 @@ export async function handleResponsesCompact(
       ? CODEX_FORWARD_BASE_URL
       : (compactProvider.baseUrl ?? "").replace(/\/+$/, "");
     if (compactProvider.authMode !== "forward" && compactProvider.apiKey) {
+      // Native compact never enters handleResponses, so it needs its own pre-dispatch key
+      // pick. Kept inside this branch on purpose: the overlay above owns the forward and
+      // codexAccountMode cases, and the picker returns null for them anyway.
+      // Transport variant, for the same reason as the Responses core: the persisted row has no
+      // registry backfills, and compactProvider is read for its transport fields below.
+      const warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider);
+      if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
       headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
@@ -917,6 +933,7 @@ export async function handleResponsesCompact(
           authCtx: poolAuthCtx,
           provider: compactProvider,
           codexAccountMode: route.codexAccountMode,
+          codexAccountNamespace: route.codexAccountNamespace,
           substituteMainCredential,
           options,
         })
@@ -1149,6 +1166,7 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
+  linkRequestSessionLane(req, internalReq);
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
