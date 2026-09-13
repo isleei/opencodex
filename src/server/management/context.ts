@@ -22,6 +22,15 @@ import type {
 
 import type { SkillsDirectoryConfig } from "../../skills/types";
 import type { CustomPathMap, McpConfigManager } from "../../mcp/config-manager";
+import type { RemoteWorkspaceHub } from "../../remote-control/workspace-hub";
+import type { RemoteWorkspaceSessionService } from "../../remote-control/workspace-sessions";
+
+export type RemoteWorkspaceHubApi = Pick<RemoteWorkspaceHub,
+  "identity" | "createPairingGrant" | "assertPairingSourceAllowed" | "pairDevice"
+  | "authenticateDeviceToken" | "attachConnection" | "updateDeviceCapabilities"
+  | "detachConnection" | "listDevices" | "revokeDevice" | "closeAllConnections">;
+export type RemoteWorkspaceSessionsApi = Pick<RemoteWorkspaceSessionService,
+  "availability" | "list" | "create" | "prompt" | "submitPrompt" | "stop" | "shutdown">;
 
 export interface ManagementApiDeps {
   /** Test injection for Skills directory locations. */
@@ -30,6 +39,11 @@ export interface ManagementApiDeps {
   mcpCustomPaths?: CustomPathMap;
   /** Test injection for custom McpConfigManager instance. */
   mcpConfigManager?: McpConfigManager;
+  remoteWorkspaceHub?: RemoteWorkspaceHubApi;
+  remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
+  /** The listener retains and awaits teardown only after this optional subsystem activates. */
+  remoteWorkspaceStopping?: () => boolean;
+  onRemoteWorkspaceShutdown?: (shutdown: () => Promise<void>) => void;
   /** Isolates automatic owned-client writes in route tests. */
   refreshOwnedCatalogIntegrations?: typeof refreshOwnedCatalogIntegrations;
   /** Platform seam for capability projections; does not alter host-level startup behavior. */

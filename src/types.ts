@@ -112,6 +112,7 @@ export type {
   TierDecision,
   ClientIdentityMode,
   OcxProviderConfig,
+  ModelCapabilities,
 } from "./types/provider";
 
 export { PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";

@@ -3,9 +3,8 @@ import {
   effectiveCodexAuthAccountId,
   fetchMainAccountInfoSnapshot,
   listCodexAuthAccountsSnapshot,
-  withSparkVisibility,
 } from "../codex/auth-api";
-import type { StoredAccountQuota } from "../codex/quota";
+import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { codexPlanKey } from "../codex/plan";
@@ -15,8 +14,11 @@ import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { isCanonicalOllamaCloudUrl } from "../adapters/ollama-native-url";
-import { providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
+import { DestinationDnsResolutionError } from "../lib/destination-policy";
+import { PinnedHttpError } from "../lib/pinned-http";
+import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
 import { apiKeyPoolEntryId } from "./api-keys";
+import { fetchMuseKeyQuotaSnapshot } from "./muse-key-quota";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode, registryEntryForProviderDestination } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -51,6 +53,7 @@ import {
 } from "./codex-capacity";
 import type {
   AccountQuotaMode,
+  QuotaFailureCode,
   ProviderQuota,
   ProviderQuotaCreditsUsd,
   ProviderQuotaWindow,
@@ -221,12 +224,10 @@ function providerQuotaFromCodexQuota(
   quota: StoredAccountQuota | Omit<StoredAccountQuota, "updatedAt"> | null | undefined,
 ): CodexCapacityQuota | null {
   if (!quota) return null;
-  // Every Codex-sourced provider report funnels through here — the pooled path via
-  // listCodexAuthAccountsSnapshot and the `direct` path via fetchMainAccountInfoSnapshot, which
-  // never touches the Codex Auth DTO. Applying the Spark preference at this one point is what
-  // stops the row surviving on /api/provider-quotas after the operator switched it off.
-  quota = withSparkVisibility(quota ?? null) ?? quota;
-  return {
+  // Direct snapshots bypass account DTOs; sanitize here as well as at ingestion.
+  quota = withoutRetiredCodexQuota(quota);
+  if (!quota) return null;
+  const projected: CodexCapacityQuota = {
     ...(quota.shortPercent !== undefined ? { fiveHourPercent: quota.shortPercent } : {}),
     ...(quota.shortResetAt !== undefined ? { fiveHourResetAt: quota.shortResetAt } : {}),
     ...(quota.weeklyPercent !== undefined ? { weeklyPercent: quota.weeklyPercent } : {}),
@@ -236,6 +237,7 @@ function providerQuotaFromCodexQuota(
     ...(quota.customWindows !== undefined ? { customWindows: quota.customWindows } : {}),
     updatedAt: "updatedAt" in quota ? quota.updatedAt : Date.now(),
   };
+  return hasQuotaRows(projected) ? projected : null;
 }
 
 /** Hash only presentation-relevant state; account ids and email addresses never enter the key. */
@@ -1885,6 +1887,36 @@ async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | n
 }
 
 /**
+ * Provider-level row probed from the key endpoint, for an account that CAN be probed.
+ *
+ * Written through the same account cache the passive path reads, so the measurement
+ * survives a restart and the per-account rows at oauth-account-routes.ts:313 pick it up
+ * with no mode change. Deliberately does not flip providerOAuthAccountQuotaMode: that
+ * mode selects readPassiveProviderAccountQuotas, and the probed per-account path it would
+ * switch to is gated on supportsPerAccountQuota, which has no meta-muse reader, so the
+ * GUI account list would go from showing observations to showing nothing.
+ */
+async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  const probedAccountId = getAccountSet(provider)?.activeAccountId;
+  if (!probedAccountId) return null;
+  const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
+  // An imported or pasted credential has no account token and never will: it is
+  // capability, not provider id, that decides whether a probe is possible.
+  if (!oauthAccessToken) return null;
+  const probedAccountKey = accountCacheKey(provider, probedAccountId);
+  const writerGeneration = captureConfigGeneration();
+  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken);
+  if (!quota) return null;
+  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+    // Hydrate before writing, for the same reason recordPassiveAccountQuota does:
+    // persistAccountQuotaCache serializes the whole in-memory map.
+    hydrateAccountQuotaCache();
+    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    persistAccountQuotaCache();
+  }
+  return report(provider, `${provider}:key-endpoint`, quota);
+}
+/**
  * Provider-level row for a passive provider: the ACTIVE account's last observed
  * subscription windows, the same shape `fetchAnthropicQuota` and `fetchKiroQuota`
  * return.
@@ -1926,6 +1958,8 @@ type AccountQuotaCacheEntry = {
   plan?: string;
   /** Last probe failed (429 / network / expired login); still may hold last-good quota. */
   unavailable?: true;
+  quotaFailure?: QuotaFailureCode;
+  quotaFailureIsCurrent?: () => boolean;
   /** Private new-reader identity; never persisted or serialized. */
   identity?: string;
   isCurrent?: () => boolean;
@@ -2039,6 +2073,8 @@ export interface ProviderAccountQuota {
   plan?: string;
   /** Set when the probe could not reach upstream (expired login, 429, network). */
   unavailable?: true;
+  quotaFailure?: QuotaFailureCode;
+  quotaFailureIsCurrent?: () => boolean;
   isCurrent?: () => boolean;
   /** Last successful summary is older than its display TTL, or a refresh failed. */
   stale?: true;
@@ -2327,6 +2363,10 @@ function explicitQuotaIdentity(provider: string, accountId: string, configured?:
   const credential = getAccountCredential(provider, accountId);
   const target = explicitQuotaConfig(provider, configured);
   if (!credential || !target) return undefined;
+  return quotaCredentialIdentity(provider, accountId, credential, target);
+}
+
+function quotaCredentialIdentity(provider: string, accountId: string, credential: NonNullable<ReturnType<typeof getAccountCredential>>, target: OcxProviderConfig): string {
   return createHash("sha256").update(JSON.stringify([
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
@@ -2440,6 +2480,12 @@ async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderCo
   return read.result;
 }
 
+function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
+  return credential ? quotaCredentialIdentity("google-antigravity", accountId, credential, {
+    adapter: "google", baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE, authMode: "oauth",
+  }) : undefined;
+}
+
 async function fetchAccountQuota(
   provider: string,
   accountId: string,
@@ -2458,15 +2504,29 @@ async function fetchAccountQuota(
   const cacheTtl = provider === "google-antigravity" && cached?.unavailable
     ? 30_000
     : ACCOUNT_QUOTA_TTL_MS;
+  // A cached AGY row from before the subscription-group catalog existed carries only
+  // model windows; re-probe rather than serve it as if it were authoritative.
   const legacyAgyCatalog = provider === "google-antigravity" && cached?.quota && !cached.unavailable && !cached.quota.agyQuotaGroups;
   if (!forceRefresh && cached && !legacyAgyCatalog && Date.now() - cached.ts < cacheTtl) {
+    // A diagnosis from a superseded credential generation is not evidence about the
+    // current one, so it must not reach the response.
+    if (provider === "google-antigravity" && cached.quotaFailure && cached.quotaFailureIsCurrent?.() !== true) return { ...cached, quotaFailure: undefined };
     return provider === "anthropic" ? { ...cached, quota: normalizeAnthropicQuota(cached.quota, Date.now()) } : cached;
   }
   const joinable = accountQuotaInflight.get(key);
   if (joinable) return joinable;
 
+  const epoch = explicitAccountEpoch;
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
+    let diagnosticIdentity: string | undefined;
+    let quotaFailure: QuotaFailureCode | undefined;
+    const quotaFailureIsCurrent = () => {
+      try { return epoch === explicitAccountEpoch && diagnosticIdentity !== undefined && diagnosticIdentity === antigravityQuotaDiagnosticIdentity(accountId); }
+      catch { return false; }
+    };
+    const diagnosticFields = () => quotaFailure && quotaFailureIsCurrent() ? { quotaFailure, quotaFailureIsCurrent } : {};
     try {
+      if (provider === "google-antigravity") diagnosticIdentity = antigravityQuotaDiagnosticIdentity(accountId);
       let quota: ProviderQuota | null = null;
       let plan: string | undefined;
       let kiroSnapshot: KiroUsageSnapshot | null = null;
@@ -2496,9 +2556,12 @@ async function fetchAccountQuota(
           // Per-account Gem/Cla windows (#1082). The project id is part of the stored
           // credential; without it the probe cannot be made, and that is "unavailable",
           // never 0%.
-          const projectId = getAccountCredential(provider, accountId)?.projectId;
-          if (!projectId) throw new Error("antigravity account has no project id");
-          quota = await fetchAntigravityUsageQuota(token, projectId);
+          const credential = getAccountCredential(provider, accountId);
+          diagnosticIdentity = credential?.access === token ? antigravityQuotaDiagnosticIdentity(accountId, credential) : undefined;
+          if (!diagnosticIdentity || !credential?.projectId) throw new Error("antigravity account unavailable");
+          const result = await probeAntigravityUsageQuota(token, credential.projectId);
+          quota = result.kind === "available" ? result.quota : null;
+          if (result.kind === "unavailable") quotaFailure = result.failure;
         } else if (provider === "anthropic") {
           quota = await fetchAnthropicUsageQuota(token);
         } else {
@@ -2515,6 +2578,7 @@ async function fetchAccountQuota(
             ? normalizeAnthropicQuota(accountQuotaCache.get(key)?.quota, Date.now()) : cached?.quota ?? null,
           ...(cached?.plan ? { plan: cached.plan } : plan ? { plan } : {}),
           unavailable: true,
+          ...diagnosticFields(),
         };
         if (cacheEpoch === explicitAccountEpoch && mayCommitAccountQuotaKey(key, writerGeneration)) {
           accountQuotaCache.set(key, entry);
@@ -2538,12 +2602,14 @@ async function fetchAccountQuota(
       }
       return entry;
     } catch {
+      if (provider === "google-antigravity") quotaFailure = "account_unavailable";
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(),
         quota: provider === "anthropic"
           ? normalizeAnthropicQuota(accountQuotaCache.get(key)?.quota, Date.now()) : cached?.quota ?? null,
         ...(cached?.plan ? { plan: cached.plan } : {}),
         unavailable: true,
+        ...diagnosticFields(),
       };
       if (cacheEpoch === explicitAccountEpoch && mayCommitAccountQuotaKey(key, writerGeneration)) {
         accountQuotaCache.set(key, entry);
@@ -2603,7 +2669,9 @@ export async function fetchProviderAccountQuotas(
       quota: provider === "anthropic" ? normalizeAnthropicQuota(entry.quota, Date.now()) : entry.quota,
       ...(entry.plan ? { plan: entry.plan } : {}),
       ...(entry.unavailable ? { unavailable: true as const } : {}),
+      ...(entry.unavailable && entry.quotaFailure && entry.quotaFailureIsCurrent?.() === true ? { quotaFailure: entry.quotaFailure } : {}),
     };
+    if (entry.quotaFailureIsCurrent) Object.defineProperty(result, "quotaFailureIsCurrent", { value: entry.quotaFailureIsCurrent });
     if (!explicitAccountReader(provider)) return result;
     const identity = entry.identity;
     Object.defineProperty(result, "isCurrent", { value: () => {
@@ -3296,114 +3364,102 @@ export function setAntigravityAccountQuotaTransportForTests(dependencies: Provid
  * the destination keeps the `provider\0accountId` cache identity exact across config changes.
  * A redirect or non-2xx yields null (unavailable), never a partial row.
  */
-export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
-  const summaryUrl = ANTIGRAVITY_QUOTA_SUMMARY_URL;
-  try {
-    const summaryResponse = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, summaryUrl, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": antigravityUserAgent(),
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ project: projectId }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    }, antigravityOutboundDependencies);
-    if (await providerRedirectError(summaryResponse, summaryUrl)) return null;
-    if (summaryResponse.status === 401 || summaryResponse.status === 403 || summaryResponse.status >= 500) return null;
-    if (summaryResponse.ok) {
-      const summaryJson = asRecord(await readQuotaJson(summaryResponse));
-      const subQuota = antigravitySubscriptionQuota(summaryJson);
-      if (!subQuota) return null;
-      const quota = parseAntigravityQuotaSummary(summaryJson);
-      if (quota) return { ...quota, agyQuotaGroups: subQuota.agyQuotaGroups };
-      return null;
-    }
-    if (summaryResponse.status !== 404) return null;
-  } catch {
-    // Fallback to fetchAvailableModels on error
-  }
+type AntigravityQuotaProbeResult =
+  | { kind: "available"; quota: ProviderQuota; source: "google-antigravity:retrieveUserQuotaSummary" | "google-antigravity:fetchAvailableModels" }
+  | { kind: "unavailable"; failure: QuotaFailureCode; legacy: { kind: "null" } | { kind: "throw"; error: unknown } };
 
-  const url = ANTIGRAVITY_QUOTA_MODELS_URL;
-  let response: Response;
+function quotaTransportFailure(error: unknown): QuotaFailureCode {
+  if (error instanceof ProviderOutboundPolicyError) return "destination_blocked";
+  if (error instanceof DestinationDnsResolutionError) return "dns_failed";
+  if (error instanceof PinnedHttpError) return error.code === "output_byte_limit" ? "response_unusable" : "timeout";
+  if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
+  return "transport_error";
+}
+
+function quotaHttpFailure(status: number): QuotaFailureCode {
+  if (status >= 300 && status < 400) return "redirect_blocked";
+  if (status === 401 || status === 403) return "access_denied";
+  if (status === 429) return "rate_limited";
+  return "upstream_error";
+}
+
+function unavailableAntigravityQuota(failure: QuotaFailureCode): AntigravityQuotaProbeResult {
+  return { kind: "unavailable", failure, legacy: { kind: "null" } };
+}
+
+/** Final attempt determines the safe diagnosis; a successful fallback clears the first failure. */
+async function probeAntigravityUsageQuota(accessToken: string, projectId: string): Promise<AntigravityQuotaProbeResult> {
+  const fetchQuota = (url: string) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+    headers: {
+      Accept: "application/json", "Content-Type": "application/json",
+      "User-Agent": antigravityUserAgent(), Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  }, antigravityOutboundDependencies);
   try {
-    response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": antigravityUserAgent(),
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ project: projectId }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    }, antigravityOutboundDependencies);
+    const response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
+    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_SUMMARY_URL)) return unavailableAntigravityQuota("redirect_blocked");
+    if (response.status === 401 || response.status === 403) return unavailableAntigravityQuota("access_denied");
+    if (response.ok) {
+      const summaryJson = asRecord(await readQuotaJson(response));
+      // Subscription-group catalog (#1082): only present when the summary carries the
+      // four subscription buckets. An endpoint that lacks them falls through to the
+      // models probe rather than returning a model-window row with no group data.
+      const subQuota = antigravitySubscriptionQuota(summaryJson);
+      if (subQuota) {
+        // Keep the full per-window catalog (Gem/Gem Weekly/Cla/Cla Weekly) for display,
+        // but attach the authoritative subscription groups alongside it.
+        const detailed = parseAntigravityQuotaSummary(summaryJson);
+        const quota = detailed ? { ...detailed, agyQuotaGroups: subQuota.agyQuotaGroups } : subQuota;
+        return { kind: "available", quota, source: "google-antigravity:retrieveUserQuotaSummary" };
+      }
+    }
+    // A 404 (or a 500, which may leave the models endpoint reachable for the safe
+    // diagnosis) defers to the models probe (fetchAvailableModels) rather than failing
+    // hard — the four-bucket subscription catalog lives there on this build. Other
+    // failures are terminal here so a transient outage is reported as unavailable.
+    if (response.status !== 404 && response.status !== 500) return unavailableAntigravityQuota(quotaHttpFailure(response.status));
   } catch {
-    return null;
+    // Existing behavior: summary transport/parse failure may recover through the models probe.
   }
-  if (await providerRedirectError(response, url)) return null;
-  if (!response.ok) return null;
-  return antigravitySubscriptionQuota(await readQuotaJson(response));
+  try {
+    const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
+    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) return unavailableAntigravityQuota("redirect_blocked");
+    if (!response.ok) return unavailableAntigravityQuota(quotaHttpFailure(response.status));
+    const modelsJson = asRecord(await readQuotaJson(response));
+    // Older AGY builds answer fetchAvailableModels with a group/bucket payload shaped like
+    // the summary endpoint. When it carries the four subscription buckets, report the
+    // per-family limiting window (matching the legacy fetchAntigravityUsageQuota fallback).
+    const modelsSubscription = antigravitySubscriptionQuota(modelsJson);
+    if (modelsSubscription) return { kind: "available", quota: modelsSubscription, source: "google-antigravity:fetchAvailableModels" };
+    // Group buckets without the subscription set still map to the per-family windows.
+    const modelsFromGroups = parseAntigravityQuotaSummary(modelsJson);
+    if (modelsFromGroups) return { kind: "available", quota: modelsFromGroups, source: "google-antigravity:fetchAvailableModels" };
+    const customWindows = antigravityWindowsFromModels(modelsJson);
+    if (!customWindows.length) return unavailableAntigravityQuota("response_unusable");
+    return { kind: "available", quota: { customWindows, updatedAt: Date.now() }, source: "google-antigravity:fetchAvailableModels" };
+  } catch (error) {
+    // The public compatibility wrapper still rejects this exact fallback error; it never enters a DTO.
+    return { kind: "unavailable", failure: quotaTransportFailure(error), legacy: { kind: "throw", error } };
+  }
+}
+
+export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
+  const result = await probeAntigravityUsageQuota(accessToken, projectId);
+  if (result.kind === "available") return result.quota;
+  if (result.legacy.kind === "throw") throw result.legacy.error;
+  return null;
 }
 
 async function fetchAntigravityQuota(provider: string): Promise<ProviderQuotaReport | null> {
   const credential = getCredential("google-antigravity");
   if (!credential?.projectId) return null;
   let accessToken: string;
-  try {
-    accessToken = await getValidAccessToken("google-antigravity");
-  } catch {
-    return null;
-  }
-
-  // Both probes are pinned to Google's own host through the provider-outbound
-  // transport, mirroring `fetchAntigravityUsageQuota` above: a configured `baseUrl` is a
-  // routing choice for requests, not a second source of Google's accounting, and these
-  // requests carry the account bearer.
-  const summaryUrl = ANTIGRAVITY_QUOTA_SUMMARY_URL;
-  try {
-    const summaryResponse = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, summaryUrl, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": antigravityUserAgent(),
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ project: credential.projectId }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    }, antigravityOutboundDependencies);
-    if (await providerRedirectError(summaryResponse, summaryUrl)) return null;
-    if (summaryResponse.status === 401 || summaryResponse.status === 403) return null;
-    if (summaryResponse.ok) {
-      const summaryJson = await readQuotaJson(summaryResponse);
-      const quota = parseAntigravityQuotaSummary(asRecord(summaryJson));
-      if (quota) {
-        return report(provider, "google-antigravity:retrieveUserQuotaSummary", quota);
-      }
-    }
-  } catch {
-    // Fallback on network/fetch error
-  }
-
-  const url = ANTIGRAVITY_QUOTA_MODELS_URL;
-  const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(),
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ project: credential.projectId }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  }, antigravityOutboundDependencies);
-  if (await providerRedirectError(response, url)) return null;
-  if (!response.ok) return null;
-  const modelsJson = await readQuotaJson(response);
-  const customWindows = antigravityWindowsFromModels(asRecord(modelsJson));
-  if (customWindows.length === 0) return null;
-  return report(provider, "google-antigravity:fetchAvailableModels", {
-    customWindows,
-    updatedAt: Date.now(),
-  });
+  try { accessToken = await getValidAccessToken("google-antigravity"); } catch { return null; }
+  const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
+  if (result.kind === "available") return report(provider, result.source, result.quota);
+  if (result.legacy.kind === "throw") throw result.legacy.error;
+  return null;
 }
 
 type KeyQuotaReader = (name: string, provider: OcxProviderConfig) => Promise<ProviderQuotaProbeResult>;
@@ -3474,9 +3530,12 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
-    // Passive providers (meta-muse): Meta publishes no quota endpoint, so there is no
-    // probe to run — the row is the active account's last in-band observation.
-    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) return fetchPassiveProviderQuota(name);
+    // meta-muse: a device-logged-in account can be probed at the key endpoint; an
+    // imported or pasted one cannot, and falls back to its last in-band observation.
+    // The probe is tried first and its failure is never fatal to the row.
+    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) {
+      return (await fetchMuseKeyQuota(name)) ?? await fetchPassiveProviderQuota(name);
+    }
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
     // bearer, even if the live provider object changes while the quota probe awaits.

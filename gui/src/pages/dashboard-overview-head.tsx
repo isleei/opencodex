@@ -4,6 +4,7 @@ import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
 import { navigateHash } from "../hash-routing";
 import type { useDashboardData } from "./use-dashboard-data";
+import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
 
 type Dash = ReturnType<typeof useDashboardData>;
 
@@ -140,6 +141,7 @@ export function DashboardOverviewHead({
         </div>
       </div>
 
+      <UsageIncompleteNotice data={usage30d} />
       {projectConfigWarnings.length > 0 && (
         <div className="notice notice-err maintenance-notice" role="alert">
           <IconAlert />
