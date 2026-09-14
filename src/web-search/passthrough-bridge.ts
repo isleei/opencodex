@@ -22,11 +22,17 @@
  *     explicit error. Answering both would need the raw mixed-tool continuation contract the
  *     2.47 track deferred (devlog/_plan/260907_track2_protocol/040_hosted_search_disposition.md),
  *     and silently half-doing it would drop the client's own tool call.
+ *   - Assistant text is never treated as a search instruction. The bridge intercepts structured
+ *     function_call / custom_tool_call items named web_search, not XML-like prose.
+ *   - Non-Ollama backends reuse the sidecar executors and those executors' own credentials.
+ *     The passthrough provider's API key is sent only to an ollama search endpoint the operator
+ *     authorized. A backend whose credential is missing stays disarmed rather than falling
+ *     through to a different paid search.
 *   - Continuation legs use a direct send rather than the core recovery ladder: the first leg
 *     still goes through it, and a KEY-auth destination has no OAuth refresh path to replay.
- *     The caller's outbound body ceiling is re-applied to every continuation body.
- *   - The client stream is renumbered (sequence_number and output_index) because events are both
- *     dropped and injected; a plain relay cannot preserve upstream numbering through that.
+*     The caller's outbound body ceiling is re-applied to every continuation body.
+*   - The client stream is renumbered (sequence_number and output_index) because events are both
+*     dropped and injected; a plain relay cannot preserve upstream numbering through that.
  *
  * The stream this module produces is ordinary Responses SSE and is handed back to the core relay,
  * so the undeclared-tool guard, the provider payload rewrites, terminal-outcome recording, and the
@@ -35,11 +41,28 @@
  */
 import { nextSseBlock, sseDataPayload } from "../server/sse-payload-rewrite";
 import { toolChoiceToolPredicate } from "../types";
-import type { OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeBackend } from "../types";
-import type { SidecarOutcome } from "./executor";
+import type {
+  OcxConfig,
+  OcxParsedRequest,
+  OcxProviderConfig,
+  OcxWebSearchSidecarConfig,
+  ProviderWebSearchBridgeBackend,
+} from "../types";
+import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import { runWebSearch, type SidecarOutcome, type SidecarSettings } from "./executor";
 import { buildWebSearchTool, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { safeWebSearchSources } from "./sources";
 import { runOllamaWebSearch } from "./ollama-executor";
+import { runAnthropicWebSearch } from "./anthropic-executor";
+import { runXaiWebSearch, validateXaiSearchOptions } from "./xai-executor";
+import { runGeminiWebSearch } from "./gemini-executor";
+import { runExaWebSearch } from "./exa-executor";
+import {
+  findAnthropicSidecarProvider,
+  findGeminiSidecarProvider,
+  findXaiSidecarProvider,
+  xaiSearchOptionsFromConfig,
+} from "./sidecar-providers";
 
 /** Canonical Ollama Cloud origin. The only origin the "ollama" backend derives on its own. */
 export const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
@@ -67,10 +90,10 @@ const CLIENT_EXECUTED_ITEM_TYPES = new Set([
 ]);
 
 export interface PassthroughWebSearchBridgePlan {
-  /** Resolved executor id. Only "ollama" has a shipped executor today. */
+  /** Resolved executor id. Absent credential for that backend leaves the bridge disarmed. */
   backend: ProviderWebSearchBridgeBackend;
-  /** Absolute search-API URL the executor posts to. */
-  endpoint: string;
+  /** Absolute search-API URL for the ollama backend. Other backends ignore this. */
+  endpoint?: string;
   /** Searches actually executed per turn before further calls are refused. */
   maxSearches: number;
   /** Per-search deadline in milliseconds. */
@@ -112,6 +135,66 @@ export function resolveOllamaWebSearchEndpoint(
     : undefined;
 }
 
+/** Credentials that may run a non-Ollama passthrough-bridge search. The key never rides the plan. */
+export interface PassthroughWebSearchBridgeAuth {
+  openAiSidecar?: ResolvedOpenAiForwardSidecar;
+  anthropic?: { providerName: string; provider: OcxProviderConfig };
+  xai?: { providerName: string; provider: OcxProviderConfig };
+  gemini?: { providerName: string; provider: OcxProviderConfig };
+  exaApiKey?: string;
+}
+
+/**
+ * Resolve the credential handle for one explicit bridge backend. Only that backend is inspected,
+ * so naming `exa` cannot spend a ChatGPT or Grok login, and naming `openai` cannot spend Exa.
+ */
+export function resolvePassthroughWebSearchBridgeAuth(
+  backend: ProviderWebSearchBridgeBackend | undefined,
+  config: OcxConfig,
+  openAiSidecar?: ResolvedOpenAiForwardSidecar,
+): PassthroughWebSearchBridgeAuth {
+  switch (backend) {
+    case "openai":
+      return openAiSidecar ? { openAiSidecar } : {};
+    case "anthropic": {
+      const anthropic = findAnthropicSidecarProvider(config);
+      return anthropic ? { anthropic } : {};
+    }
+    case "xai": {
+      const xai = findXaiSidecarProvider(config);
+      if (!xai) return {};
+      if (validateXaiSearchOptions(xaiSearchOptionsFromConfig(config.webSearchSidecar ?? {}))) {
+        return {};
+      }
+      return { xai };
+    }
+    case "gemini": {
+      const gemini = findGeminiSidecarProvider(config);
+      return gemini ? { gemini } : {};
+    }
+    case "exa": {
+      const exaApiKey = config.webSearchSidecar?.exaApiKey;
+      return typeof exaApiKey === "string" && exaApiKey.length > 0 ? { exaApiKey } : {};
+    }
+    default:
+      return {};
+  }
+}
+
+/** True when this passthrough turn may need the ChatGPT sidecar for an openai-backed bridge. */
+export function shouldResolveOpenAiPassthroughWebSearchBridge(
+  provider: OcxProviderConfig,
+  parsed: OcxParsedRequest,
+  isPassthrough: boolean,
+): boolean {
+  if (!isPassthrough || parsed.stream !== true || !parsed._webSearch) return false;
+  if (provider.authMode !== "key") return false;
+  if (provider.webSearchBridge?.enabled !== true || provider.webSearchBridge.backend !== "openai") {
+    return false;
+  }
+  return toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool());
+}
+
 /**
  * Decide whether this passthrough turn may run the web-search bridge.
  *
@@ -126,7 +209,11 @@ export function resolveOllamaWebSearchEndpoint(
 export function planPassthroughWebSearchBridge(
   parsed: OcxParsedRequest,
   provider: OcxProviderConfig,
-  options: { isPassthrough: boolean; stream: boolean },
+  options: {
+    isPassthrough: boolean;
+    stream: boolean;
+    auth?: PassthroughWebSearchBridgeAuth;
+  },
 ): PassthroughWebSearchBridgePlan | undefined {
   if (!options.isPassthrough || !options.stream) return undefined;
   if (!parsed._webSearch) return undefined;
@@ -137,10 +224,9 @@ export function planPassthroughWebSearchBridge(
   if (!bridge || bridge.enabled !== true) return undefined;
   // A tool_choice that excludes web search excludes the bridge too; the model may not search.
   if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
-  // Explicit-only, and inert for every backend whose executor has not shipped.
-  if (bridge.backend !== "ollama") return undefined;
-  const endpoint = resolveOllamaWebSearchEndpoint(provider);
-  if (!endpoint) return undefined;
+  // Explicit-only: an omitted backend never defaults to a paid sidecar search.
+  const backend = bridge.backend;
+  if (!backend) return undefined;
   const maxSearches = Number.isInteger(bridge.maxSearches)
     && bridge.maxSearches! >= 1
     && bridge.maxSearches! <= 10
@@ -151,7 +237,18 @@ export function planPassthroughWebSearchBridge(
     && bridge.timeoutMs! <= 600_000
     ? bridge.timeoutMs!
     : DEFAULT_BRIDGE_TIMEOUT_MS;
-  return { backend: "ollama", endpoint, maxSearches, timeoutMs };
+  if (backend === "ollama") {
+    const endpoint = resolveOllamaWebSearchEndpoint(provider);
+    if (!endpoint) return undefined;
+    return { backend, endpoint, maxSearches, timeoutMs };
+  }
+  const auth = options.auth;
+  if (backend === "openai" && auth?.openAiSidecar) return { backend, maxSearches, timeoutMs };
+  if (backend === "anthropic" && auth?.anthropic) return { backend, maxSearches, timeoutMs };
+  if (backend === "xai" && auth?.xai) return { backend, maxSearches, timeoutMs };
+  if (backend === "gemini" && auth?.gemini) return { backend, maxSearches, timeoutMs };
+  if (backend === "exa" && auth?.exaApiKey) return { backend, maxSearches, timeoutMs };
+  return undefined;
 }
 
 /** One intercepted search call, carried from the upstream stream into the next request body. */
@@ -571,27 +668,154 @@ export function createOllamaBridgeExecutor(
   plan: PassthroughWebSearchBridgePlan,
   apiKey: string,
 ): PassthroughWebSearchBridgeExecutor {
-  return async (queries, signal) => {
-    const texts: string[] = [];
-    const sources: SidecarOutcome["sources"] = [];
-    const errors: string[] = [];
-    for (const query of queries) {
-      if (signal?.aborted) break;
-      const outcome = await runOllamaWebSearch(query, apiKey, plan.endpoint, plan.timeoutMs, signal);
-      if (outcome.error) {
-        errors.push(outcome.error);
-        continue;
-      }
-      texts.push(queries.length > 1 ? "Results for \"" + query + "\":\n" + outcome.text : outcome.text);
-      for (const source of outcome.sources) {
-        if (!sources.some(existing => existing.url === source.url)) sources.push(source);
-      }
-    }
-    if (texts.length === 0) {
-      return { text: "", sources: [], error: errors[0] ?? "web search produced no results" };
-    }
-    return { text: texts.join("\n\n"), sources };
+  return createPassthroughWebSearchBridgeExecutor(plan, { providerApiKey: apiKey });
+}
+
+/** Per-search credentials and sidecar settings. Secrets stay off the plan object. */
+export interface PassthroughWebSearchBridgeExecutorContext {
+  providerApiKey?: string;
+  auth?: PassthroughWebSearchBridgeAuth;
+  hostedTool?: Record<string, unknown>;
+  describeImages?: boolean;
+  sidecar?: Pick<OcxWebSearchSidecarConfig, "model" | "reasoning" | "xSearch">;
+}
+
+const DEFAULT_OPENAI_BRIDGE_MODEL = "gpt-5.6-luna";
+const DEFAULT_ANTHROPIC_BRIDGE_MODEL = "claude-sonnet-5";
+const DEFAULT_XAI_BRIDGE_MODEL = "grok-4.6";
+const DEFAULT_GEMINI_BRIDGE_MODEL = "gemini-3.8-flash";
+const DEFAULT_BRIDGE_REASONING = "low";
+
+function sidecarSettingsForBridge(
+  backend: ProviderWebSearchBridgeBackend,
+  plan: PassthroughWebSearchBridgePlan,
+  context: PassthroughWebSearchBridgeExecutorContext,
+): SidecarSettings {
+  const sidecar = context.sidecar ?? {};
+  const model = backend === "anthropic" ? sidecar.model ?? DEFAULT_ANTHROPIC_BRIDGE_MODEL
+    : backend === "xai" ? sidecar.model ?? DEFAULT_XAI_BRIDGE_MODEL
+    : backend === "gemini" ? sidecar.model ?? DEFAULT_GEMINI_BRIDGE_MODEL
+    : sidecar.model ?? DEFAULT_OPENAI_BRIDGE_MODEL;
+  return {
+    model,
+    reasoning: sidecar.reasoning ?? DEFAULT_BRIDGE_REASONING,
+    timeoutMs: plan.timeoutMs,
+    describeImages: context.describeImages === true,
   };
+}
+
+async function executeBridgeQueries(
+  queries: string[],
+  runOne: (query: string, signal?: AbortSignal) => Promise<SidecarOutcome>,
+  signal?: AbortSignal,
+): Promise<SidecarOutcome> {
+  const texts: string[] = [];
+  const sources: SidecarOutcome["sources"] = [];
+  const errors: string[] = [];
+  for (const query of queries) {
+    if (signal?.aborted) break;
+    const outcome = await runOne(query, signal);
+    if (outcome.error) {
+      errors.push(outcome.error);
+      continue;
+    }
+    texts.push(queries.length > 1 ? "Results for \"" + query + "\":\n" + outcome.text : outcome.text);
+    for (const source of outcome.sources) {
+      if (!sources.some(existing => existing.url === source.url)) sources.push(source);
+    }
+  }
+  if (texts.length === 0) {
+    return { text: "", sources: [], error: errors[0] ?? "web search produced no results" };
+  }
+  return { text: texts.join("\n\n"), sources };
+}
+
+/**
+ * Bind the executor for a planned backend. Ollama spends this provider's API key on the planned
+ * endpoint; every other backend spends the sidecar credential that armed the plan.
+ */
+export function createPassthroughWebSearchBridgeExecutor(
+  plan: PassthroughWebSearchBridgePlan,
+  context: PassthroughWebSearchBridgeExecutorContext,
+): PassthroughWebSearchBridgeExecutor {
+  const settings = sidecarSettingsForBridge(plan.backend, plan, context);
+  return (queries, signal) => executeBridgeQueries(queries, async (query, querySignal) => {
+    switch (plan.backend) {
+      case "ollama":
+        if (!plan.endpoint) {
+          return { text: "", sources: [], error: "ollama web-search backend selected without an endpoint" };
+        }
+        return runOllamaWebSearch(
+          query,
+          context.providerApiKey ?? "",
+          plan.endpoint,
+          plan.timeoutMs,
+          querySignal,
+        );
+      case "openai": {
+        const sidecar = context.auth?.openAiSidecar;
+        if (!sidecar) {
+          return { text: "", sources: [], error: "openai web-search bridge selected without a ChatGPT sidecar" };
+        }
+        return runWebSearch(
+          query,
+          context.hostedTool ?? { type: "web_search" },
+          sidecar.provider,
+          sidecar.headers,
+          settings,
+          querySignal,
+          sidecar.recordOutcome,
+        );
+      }
+      case "anthropic": {
+        const anthropic = context.auth?.anthropic;
+        if (!anthropic) {
+          return { text: "", sources: [], error: "anthropic web-search bridge selected without stored Anthropic OAuth" };
+        }
+        return runAnthropicWebSearch(
+          query,
+          anthropic.providerName,
+          anthropic.provider,
+          settings,
+          querySignal,
+        );
+      }
+      case "xai": {
+        const xai = context.auth?.xai;
+        if (!xai) {
+          return { text: "", sources: [], error: "xai web-search bridge selected without stored Grok OAuth" };
+        }
+        return runXaiWebSearch(
+          query,
+          xai.providerName,
+          xai.provider,
+          settings,
+          xaiSearchOptionsFromConfig(context.sidecar ?? {}),
+          querySignal,
+        );
+      }
+      case "gemini": {
+        const gemini = context.auth?.gemini;
+        if (!gemini) {
+          return { text: "", sources: [], error: "gemini web-search bridge selected without stored Antigravity OAuth" };
+        }
+        return runGeminiWebSearch(
+          query,
+          gemini.providerName,
+          gemini.provider,
+          settings,
+          querySignal,
+        );
+      }
+      case "exa": {
+        const exaApiKey = context.auth?.exaApiKey;
+        if (!exaApiKey) {
+          return { text: "", sources: [], error: "exa web-search bridge selected without an exaApiKey" };
+        }
+        return runExaWebSearch(query, exaApiKey, settings, querySignal);
+      }
+    }
+  }, signal);
 }
 
 /**

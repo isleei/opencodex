@@ -17,8 +17,8 @@ import {
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
-  "If Codex still shows an older model list, restart its long-lived app-server process after sync (ocx sync --restart-codex). "
-  + "On Windows the desktop app itself may also need a full restart (ocx sync --restart-desktop-app).";
+  "If Codex still shows an older model list, run `ocx sync --restart-codex`: it restarts the long-lived app-server "
+  + "processes and fully restarts the Codex desktop app, whose model picker is what actually holds the stale list.";
 
 /** Attach the shared dashboard hint only after a catalog or models_cache write. */
 export function attachStaleAppServerHint<T extends {
@@ -563,8 +563,8 @@ export function formatStaleCodexAppServerWarning(
   return (
     `WARNING: ${processes.length} Codex app-server process(es) still running (PID${processes.length === 1 ? "" : "s"}: ${pids}). `
     + "Disk catalog/cache were updated, but Codex may keep showing the old model list until those processes restart. "
-    + "Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. "
-    + "On Windows the desktop app itself may also need a full restart (`ocx sync --restart-desktop-app`). "
+    + "Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to restart those processes and the Codex desktop app. "
+    + "Use `--restart-app-server-only` to leave the desktop app running. "
     + "Active turns may be interrupted."
   );
 }
@@ -1176,6 +1176,19 @@ export interface AfterCatalogWriteAppServerOptions {
   restart: boolean;
   log?: Pick<Console, "log" | "error"> | null;
   io?: CodexAppServerProcessIo;
+  /**
+   * Pids already covered by a desktop-app restart in this same command.
+   *
+   * The app-server is a CHILD of the Codex desktop app on every platform, so signalling
+   * it and then quitting the app interrupts the operator's in-flight turn twice in one
+   * command. Excluding the desktop tree leaves the quit to do that work once.
+   *
+   * Standalone app-servers - the npm wrapper pair, SSH bootstraps - are not members of
+   * that tree and are still signalled. An empty list means no exclusion, which is what a
+   * failed discovery or probe yields: a missed exclusion costs an extra interruption, a
+   * wrong one leaves a stale app-server serving a roster that no longer exists.
+   */
+  excludePids?: readonly number[];
 }
 
 export interface AfterCatalogWriteAppServerResult {
@@ -1189,7 +1202,9 @@ export interface AfterCatalogWriteAppServerResult {
 export function afterCatalogWriteHandleAppServers(
   options: AfterCatalogWriteAppServerOptions,
 ): AfterCatalogWriteAppServerResult {
-  const processes = listCodexAppServerProcesses(options.io);
+  const excluded = new Set(options.excludePids ?? []);
+  const processes = listCodexAppServerProcesses(options.io)
+    .filter(process => !excluded.has(process.pid));
   const hint = STALE_CODEX_APP_SERVER_HINT;
   if (processes.length === 0) {
     return { processes, warned: false, hint };

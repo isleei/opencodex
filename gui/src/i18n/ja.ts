@@ -1251,7 +1251,6 @@ export const ja: Record<TKey, string> = {
   "pws.quotaFailure.timeout": "割り当てリクエストがタイムアウトしました。",
   "pws.quotaFailure.transport_error": "割り当てサーバーへの接続に失敗しました。",
   "pws.quotaFailure.response_unusable": "割り当てデータを読み取れませんでした。",
-
   "pws.selected": "選択中",
   "pws.copyModelId": "ID をコピー",
   "pws.modelCopied": "コピーしました!",
@@ -3362,5 +3361,4 @@ export const ja: Record<TKey, string> = {
   "remote.event.status": "状態",
   "remote.event.tool": "リモートツール",
   "remote.event.error": "エラー",
-
 };

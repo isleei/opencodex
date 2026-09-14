@@ -2477,7 +2477,7 @@ async function gatherRoutedModelsLocal(
   return { ...assembled, needsLive };
 }
 
-/** Bound a proven Codex-forward custom row without changing its stored configuration. */
+/** Bound a custom row whose model id has pinned native Codex metadata, without changing stored configuration. */
 function boundCustomNativeReasoning(
   model: CatalogModel,
   allowed: readonly string[],
@@ -2788,8 +2788,8 @@ async function gatherRoutedModelsUncached(
         : {}),
       // Explicit custom-row ladder wins over the inherited provider row below: the merge only
       // gap-fills, so a stored `[]` (explicit "no reasoning") or a declared ladder is kept
-      // instead of being replaced by that row's metadata. Only proven native aliases are
-      // bounded against their own capability source after the merge.
+      // instead of being replaced by that row's metadata. Capability-backed native model ids
+      // are bounded against their own pinned ladder after the merge, including gateways.
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
@@ -2842,8 +2842,16 @@ async function gatherRoutedModelsUncached(
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
     } : base;
-    const reasoningBounded = codexForwardNativeCapabilityAlias
-      ? boundCustomNativeReasoning(merged, nativeReasoningEfforts(cm.modelId), nativeAliasDefaultEffort)
+    // Catalog-advertised efforts are bounded whenever the model id is a pinned native
+    // slug. Desktop validates that id, so a gateway such as YYLJ/gpt-6-astra still cannot
+    // advertise none/minimal. Full native identity stays behind the alias predicate.
+    const nativeEffortSource = hasNativeOpenAiCapabilityMetadata(cm.modelId);
+    const reasoningBounded = nativeEffortSource
+      ? boundCustomNativeReasoning(
+        merged,
+        nativeReasoningEfforts(cm.modelId),
+        nativeAliasDefaultEffort ?? nativeDefaultReasoningEffort(cm.modelId),
+      )
       : merged;
     // Vision-sidecar coverage only: when the enriched provider's shared predicate matches
     // noVisionModels or text-without-image modelInputModalities, advertise image input so the

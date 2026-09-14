@@ -2150,7 +2150,6 @@ export const de: Record<TKey, string> = {
   "pws.quotaFailure.timeout": "Die Kontingentanfrage hat das Zeitlimit überschritten.",
   "pws.quotaFailure.transport_error": "Die Verbindung zum Kontingentserver ist fehlgeschlagen.",
   "pws.quotaFailure.response_unusable": "Der Anbieter lieferte unbrauchbare Kontingentdaten.",
-
   "pws.selected": "Ausgewählt",
   "pws.copyModelId": "ID kopieren",
   "pws.modelCopied": "Kopiert!",
@@ -3341,5 +3340,4 @@ export const de: Record<TKey, string> = {
   "remote.event.status": "Status",
   "remote.event.tool": "Remote-Werkzeug",
   "remote.event.error": "Fehler",
-
 };

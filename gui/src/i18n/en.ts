@@ -1353,7 +1353,6 @@ export const en = {
   "pws.quotaFailure.timeout": "The quota request timed out.",
   "pws.quotaFailure.transport_error": "The quota connection failed.",
   "pws.quotaFailure.response_unusable": "The provider returned unusable quota data.",
-
   "pws.selected": "Selected",
   "pws.copyModelId": "Copy ID",
   "pws.modelCopied": "Copied!",
@@ -3375,7 +3374,6 @@ export const en = {
   "remote.event.status": "Status",
   "remote.event.tool": "Remote tool",
   "remote.event.error": "Error",
-
 } as const;
 
 export type TKey = keyof typeof en;

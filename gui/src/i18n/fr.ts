@@ -3185,11 +3185,11 @@ export const fr: Record<TKey, string> = {
   "subscriptions.other.title": "Autres abonnements connectés",
   "subscriptions.noAccounts": "Aucun compte connecté détecté pour cet abonnement",
   "subscriptions.switchSuccess": "Compte actif basculé avec succès vers {account}",
-  "pws.clientIdentity": "Client Identity",
-  "pws.clientIdentityDesc": "Header spoofing & passthrough policy for upstream gateway compatibility.",
-  "pws.clientIdentity.none": "Clean (Default)",
-  "pws.clientIdentity.auto": "Auto by Model Family",
-  "pws.clientIdentity.passthrough": "Client Passthrough",
+  "pws.clientIdentity": "Identité du client",
+  "pws.clientIdentityDesc": "Usurpation d’en-tête et politique de pass-through pour la compatibilité avec les passerelles amont.",
+  "pws.clientIdentity.none": "Propre (par défaut)",
+  "pws.clientIdentity.auto": "Auto par famille de modèles",
+  "pws.clientIdentity.passthrough": "Pass-through du client",
   "pws.clientIdentity.codex": "Codex CLI",
   "pws.clientIdentity.claudeCode": "Claude Code",
   "pws.clientIdentity.grok": "Grok Build",
@@ -3327,5 +3327,4 @@ export const fr: Record<TKey, string> = {
   "remote.event.status": "État",
   "remote.event.tool": "Outil distant",
   "remote.event.error": "Erreur",
-
 };

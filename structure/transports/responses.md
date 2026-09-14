@@ -288,12 +288,12 @@ call when `isXaiResponsesDestination` recognizes HTTPS `api.x.ai` or `cli-chat-p
 on the standard port. A nonblank string becomes one `input_text` part with the original text;
 the same author/recipient attribution is retained and the private transport item id is removed.
 
-This addresses readable child-result delivery (#3907), not scheduling or decryption. Blank,
-malformed, ciphertext-only and mixed unknown/encrypted content retains the existing fail-closed
-path. Forward destinations never enable the option. The parser and encrypted-task recovery
-owners are unchanged, and no broad content-schema validation or adapter-wide string conversion
-is introduced. Mocked server fixtures cover parent, child, and parent-result continuation over
-SSE and JSON while preserving actual tool-call/result pairs.
+This addresses readable child-result delivery (#3907), not scheduling or decryption. Blank, malformed,
+ciphertext-only and mixed unknown/encrypted content stays unlowered here; backend ciphertext is replaced by the
+[omission marker](../subagents.md#routed-agent-message-ciphertext-egress) before it can reach a routed destination.
+Forward destinations never enable the option. The parser and encrypted-task recovery owners are unchanged, and no
+broad content-schema validation or adapter-wide string conversion is introduced. Mocked server fixtures cover
+parent, child, and parent-result continuation over SSE and JSON while preserving actual tool-call/result pairs.
 
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and

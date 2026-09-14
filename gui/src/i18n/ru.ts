@@ -1321,7 +1321,6 @@ export const ru: Record<TKey, string> = {
   "pws.quotaFailure.timeout": "Время ожидания запроса квоты истекло.",
   "pws.quotaFailure.transport_error": "Не удалось подключиться к сервису квоты.",
   "pws.quotaFailure.response_unusable": "Провайдер вернул непригодные данные квоты.",
-
   "pws.selected": "Выбрана",
   "pws.copyModelId": "Копировать ID",
   "pws.modelCopied": "Скопировано!",
@@ -2574,7 +2573,6 @@ export const ru: Record<TKey, string> = {
   "cws.err.invalidWeight": "Каждый вес round-robin должен быть целым числом от 1 до 10000.",
   "cws.err.noEnabledTarget": "Хотя бы одна цель должна использовать включённого провайдера.",
 
-
   "nav.cloud": "Cloud Sync",
   "cloud.subtitle": "Backup and restore ~/.opencodex to your Microsoft OneDrive (OAuth device login).",
   "cloud.statusTitle": "Status",
@@ -3364,5 +3362,4 @@ export const ru: Record<TKey, string> = {
   "remote.event.status": "Состояние",
   "remote.event.tool": "Удалённый инструмент",
   "remote.event.error": "Ошибка",
-
 };

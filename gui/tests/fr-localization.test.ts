@@ -240,6 +240,16 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // Product names and CLI identities stay in their upstream spelling.
+  "logs.filter.surface.opencode",
+  "logs.badge.agy",
+  "pws.clientIdentity.codex",
+  "pws.clientIdentity.claudeCode",
+  "pws.clientIdentity.grok",
+  "pws.clientIdentity.agy",
+  "workflows.templates.api",
+  "subscriptions.agy.quota.gemini",
+  "subscriptions.agy.quota.claudeGpt",
 ]);
 
 function placeholders(value: string): string[] {

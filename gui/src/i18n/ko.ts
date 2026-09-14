@@ -2189,7 +2189,6 @@ export const ko: Record<TKey, string> = {
   "pws.quotaFailure.timeout": "쿼터 조회 시간이 초과됐습니다.",
   "pws.quotaFailure.transport_error": "쿼터 서버에 연결하지 못했습니다.",
   "pws.quotaFailure.response_unusable": "제공자가 반환한 쿼터 데이터를 읽을 수 없습니다.",
-
   "pws.selected": "선택됨",
   "pws.copyModelId": "ID 복사",
   "pws.modelCopied": "복사됨!",
@@ -3363,5 +3362,4 @@ export const ko: Record<TKey, string> = {
   "remote.event.status": "상태",
   "remote.event.tool": "원격 도구",
   "remote.event.error": "오류",
-
 };

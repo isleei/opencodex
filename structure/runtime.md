@@ -201,6 +201,10 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback.
+The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
+so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
+remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
+remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
@@ -234,6 +238,13 @@ executed search result appended, never re-entering the initial reselection/rebui
 dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
 covers drift during search, while pacing, and before first-leg headers return, plus successful
 first-dispatch reselection and result preservation.
+
+`providers.<name>.webSearchBridge.backend` is explicit-only. `ollama` spends that provider's API key
+on the planned search endpoint. `openai`, `anthropic`, `xai`, `gemini`, and `exa` reuse the matching
+sidecar executor and that executor's own credential; a missing credential leaves the bridge
+disarmed rather than falling through to another paid search. A leg that mixes an intercepted
+`web_search` call with another client-executed tool still fails closed. Assistant text is not
+treated as a search instruction.
 
 ## Remote Hub hardening ownership
 

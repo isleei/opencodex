@@ -158,9 +158,11 @@ import {
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import {
-  createOllamaBridgeExecutor,
+  createPassthroughWebSearchBridgeExecutor,
   createPassthroughWebSearchBridgeStream,
   planPassthroughWebSearchBridge,
+  resolvePassthroughWebSearchBridgeAuth,
+  shouldResolveOpenAiPassthroughWebSearchBridge,
 } from "../../web-search/passthrough-bridge";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -394,7 +396,7 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
-import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
+import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace, stripAgentMessageCiphertextInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier, type ProviderFetchOptions } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
@@ -4024,6 +4026,49 @@ async function handleResponsesInner(
     return unreadableEncryptedAgentTaskResponse(recoveryFailureReason);
   }
 
+  // The guard above asks whether the CURRENT worker task is readable, and it only inspects the
+  // tail item. An `agent_message` that mixes readable text with backend ciphertext answers
+  // "readable" to that question at every position, so it passed -- and then
+  // `normalizeRoutedAgentMessages` refused to lower it, because lowering requires every part to
+  // be representable. The raw Responses passthrough serialized the private item as it stood, so
+  // backend ciphertext and an item type only the Codex backend declares reached a third-party
+  // provider, which answered `422 unknown item type "agent_message"` (#4454).
+  //
+  // The opaque-blob path already knows the repair: replace the undecryptable part with an
+  // omission marker, which leaves the item lowerable. It applied that repair only AFTER an
+  // upstream rejection. For a destination that cannot accept the private item under any
+  // circumstances, that round trip was never going to succeed and sent the ciphertext to find
+  // out, so do the repair here instead. Recovery above has already had its chance to turn the
+  // same bytes into real plaintext; only what it could not rescue reaches this.
+  if (inboundWire === "responses" && !finalRouteCanPassThroughEncryptedTask) {
+    // Only the raw Responses passthrough puts input items on the wire verbatim, so that is the
+    // only wire this has to repair: translated wires rebuild the body from parsed messages, where
+    // `inputContentParts` drops an encrypted part instead of forwarding it. The exemption is the
+    // canonical Codex backend alone, because it is the one destination that minted these bytes and
+    // can read them. `authMode: "forward"` is NOT that test -- a noncanonical forward gateway is
+    // somebody else's server that happens to be configured for passthrough, and it receives the
+    // ciphertext like any other third party.
+    //
+    // Combo children run this too. Each child carries its own `structuredClone` of the body
+    // (`concreteComboRequestBody`) and its own concrete route, so a sibling's repair is invisible
+    // here and a target that resolves to a routed Responses wire would otherwise send the
+    // ciphertext that the parent's own dispatch no longer does.
+    const wireProvider = resolveWireProtocolOverride(
+      route.providerName,
+      route.modelId,
+      route.provider,
+      inboundWire,
+    );
+    if (wireProvider.adapter === "openai-responses" && !isCanonicalOpenAiForwardProvider(wireProvider)) {
+      const repaired = stripAgentMessageCiphertextInPlace((body as { input?: unknown } | undefined)?.input);
+      if (repaired > 0) {
+        console.warn(
+          `[opencodex] replaced ciphertext in ${repaired} replayed agent message(s) with an omission marker; the selected provider cannot read native ChatGPT ciphertext`,
+        );
+      }
+    }
+  }
+
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
   // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
   // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
@@ -4726,7 +4771,8 @@ async function handleResponsesInner(
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
   const needsOpenAiSearch = !routedCompaction && !adapter.runTurn
-    && shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
+    && (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
+      || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough));
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
       const candidates = listOpenAiForwardSidecarCandidates(config);
@@ -6199,9 +6245,15 @@ async function handleResponsesInner(
       // conversation upstream, and hands back ordinary Responses SSE — so every rewrite below,
       // including the guard itself, still inspects the client-facing stream. Default OFF: without
       // the opt-in this is one planner call and the relay is byte-identical to before.
+      const webSearchBridgeAuth = resolvePassthroughWebSearchBridgeAuth(
+        route.provider.webSearchBridge?.backend,
+        config,
+        openAiSidecar,
+      );
       const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
         isPassthrough: true,
         stream: parsed.stream === true,
+        auth: webSearchBridgeAuth,
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(request);
@@ -6235,7 +6287,13 @@ async function handleResponsesInner(
             }),
             false,
           ),
-          execute: createOllamaBridgeExecutor(webSearchBridgePlan, route.provider.apiKey ?? ""),
+          execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
+            providerApiKey: route.provider.apiKey ?? "",
+            auth: webSearchBridgeAuth,
+            hostedTool: parsed._webSearch,
+            describeImages: isModelTextOnly(route.provider, route.modelId),
+            sidecar: config.webSearchSidecar,
+          }),
           // Appending a search result can push the continuation past the ceiling the first leg
           // was admitted under, so the same limit is re-applied before every later send.
           checkOutboundBody: (continuationBody: string) => {

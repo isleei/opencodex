@@ -3364,5 +3364,4 @@ export const tr: Record<TKey, string> = {
   "remote.event.status": "Durum",
   "remote.event.tool": "Uzak araç",
   "remote.event.error": "Hata",
-
 };

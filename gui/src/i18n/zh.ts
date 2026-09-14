@@ -2169,7 +2169,6 @@ export const zh: Record<TKey, string> = {
   "pws.quotaFailure.timeout": "配额请求超时。",
   "pws.quotaFailure.transport_error": "配额连接失败。",
   "pws.quotaFailure.response_unusable": "提供商返回的配额数据不可用。",
-
   "pws.selected": "已选择",
   "pws.copyModelId": "复制 ID",
   "pws.modelCopied": "已复制！",
@@ -3362,5 +3361,4 @@ export const zh: Record<TKey, string> = {
   "remote.event.status": "状态",
   "remote.event.tool": "远程工具",
   "remote.event.error": "错误",
-
 };
