@@ -2,6 +2,18 @@
 export type OAuthCredentialSource = "oauth" | "local-cli" | "credential-file" | "environment" | "manual";
 
 /**
+ * Login-flow failure whose message is already a fixed, account-free operator action
+ * (for example "log into the vendor CLI first"). Unlike arbitrary throw strings, these
+ * are safe to surface verbatim through the public OAuth vocabulary.
+ */
+export class OAuthLoginRemediationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthLoginRemediationError";
+  }
+}
+
+/**
  * How the account authenticated. Mirrors `KiroAuthType` in `./kiro-credentials`, restated here so
  * the credential-store types do not depend on the SQLite import module.
  *

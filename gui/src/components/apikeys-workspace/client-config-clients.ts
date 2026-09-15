@@ -27,7 +27,6 @@ export const CLIENT_LABEL_KEYS = {
   aside: "api.clientConfig.clientAside",
   raycast: "api.clientConfig.clientRaycast",
   omo: "api.clientConfig.clientOmo",
-  cline: "api.clientConfig.clientCline",
 } as const;
 
 /**
@@ -80,7 +79,6 @@ export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   // Two inks: an #F4F4F4 plate carrying an #041617 face. Masking reads alpha,
   // so it would paint the plate and throw the face away — see the README.
   omo: "/provider-icons/omo.svg",
-  cline: "/provider-icons/cline-color.svg",
 };
 
 /**

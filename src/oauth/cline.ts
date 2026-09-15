@@ -7,6 +7,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { clineConfigPath } from "../clients/config-export";
+import { OAuthLoginRemediationError } from "./types";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 export const WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
@@ -146,6 +147,28 @@ export async function refreshClineToken(
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
+    let oauthError: string | undefined;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === "string") oauthError = parsed.error;
+    } catch {
+      // non-JSON error body
+    }
+    // Terminal WorkOS grant failures mean the LOCAL CLI session is dead, not that
+    // OpenCodex itself is broken — surface the operator action instead of the
+    // generic public OAuth vocabulary.
+    if (
+      response.status === 400
+      || response.status === 401
+      || oauthError === "invalid_grant"
+      || oauthError === "invalid_token"
+      || oauthError === "revoked"
+      || oauthError === "refresh_token_reused"
+    ) {
+      throw new OAuthLoginRemediationError(
+        "Local Cline session is expired or already used. Log in again via the Cline VS Code extension or Cline CLI (`cline`), then re-run login to import the fresh account.",
+      );
+    }
     throw new Error(`Cline WorkOS token refresh failed (HTTP ${response.status}): ${body || response.statusText}`);
   }
 
@@ -190,14 +213,23 @@ export async function loginCline(
     if (local) {
       if (local.expires <= Date.now() + 60_000) {
         ctrl?.onProgress?.("Local Cline session token expired; refreshing via WorkOS...");
-        return await refreshClineToken(local.refresh, ctrl?.signal, local);
+        try {
+          return await refreshClineToken(local.refresh, ctrl?.signal, local);
+        } catch (error) {
+          if (error instanceof OAuthLoginRemediationError) throw error;
+          // Fall through: a dead local grant is not a reason to hide the
+          // "log into Cline first" remediation when no import can succeed.
+          throw new OAuthLoginRemediationError(
+            "Local Cline session could not be refreshed. Log in again via the Cline VS Code extension or Cline CLI (`cline`), then re-run login to import the fresh account.",
+          );
+        }
       }
       ctrl?.onProgress?.("Imported active Cline session successfully.");
       return local;
     }
   }
 
-  throw new Error(
+  throw new OAuthLoginRemediationError(
     "No local Cline session found. Please log in to Cline via the VS Code extension or Cline CLI (`cline`), then re-run `ocx login cline` to import your account.",
   );
 }

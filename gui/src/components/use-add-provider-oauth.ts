@@ -125,7 +125,10 @@ export function useAddProviderOAuth({
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
         const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
-        if (s?.error) {
+        // Prefer a usable credential over a residual settlement error (config reconcile
+        // failure after a successful token save, or a failed re-login that left the
+        // previous account intact).
+        if (s?.error && !s.loggedIn) {
           activeProvidersRef.current.delete(providerId);
           setOauthMsgTone("warn");
           setOauthMsg(t("modal.loginError", { error: s.error }));
@@ -133,6 +136,7 @@ export function useAddProviderOAuth({
         }
         if (s?.loggedIn) {
           activeProvidersRef.current.delete(providerId);
+          if (s.error) setOauthMsg(t("modal.loginError", { error: s.error }));
           onAdded(providerId);
           return;
         }

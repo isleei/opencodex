@@ -7,6 +7,7 @@ import {
   getLoginStatus,
   getValidAccessToken,
   OAuthLoginRequiredError,
+  OAuthLoginRemediationError,
   OAuthProviderPublicationError,
   OAuthReauthIdentityMismatchError,
   OAuthReauthIdentityUnverifiedError,
@@ -319,6 +320,23 @@ describe("OAuth status privacy", () => {
     expect(publicOAuthAuthenticationErrorMessage(new OAuthMutationBusyError(PUBLIC_ERROR_CANARY))).toBe(
       "OAuth mutation queue is busy",
     );
+    const remediation = "No local Cline session found. Please log in to Cline via the VS Code extension or Cline CLI (`cline`), then re-run `ocx login cline` to import your account.";
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRemediationError(remediation))).toBe(remediation);
+  });
+
+  test("Cline WorkOS terminal refresh failures surface operator remediation, not the generic OAuth error", async () => {
+    const { refreshClineToken } = await import("../../src/oauth/cline");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ error: "invalid_grant", error_description: "Refresh token already exchanged." }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+    try {
+      await expect(refreshClineToken("spent-refresh-token")).rejects.toBeInstanceOf(OAuthLoginRemediationError);
+      await expect(refreshClineToken("spent-refresh-token")).rejects.toThrow(/Log in again via the Cline VS Code extension/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("management OAuth login does not return raw provider or filesystem errors", async () => {

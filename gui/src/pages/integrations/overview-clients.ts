@@ -155,7 +155,6 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   aside: "integrations.tab.aside",
   raycast: "integrations.tab.raycast",
   omo: "integrations.tab.omo",
-  cline: "integrations.tab.cline",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */

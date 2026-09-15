@@ -1,4 +1,5 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import { OAuthLoginRemediationError } from "./types";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
@@ -442,6 +443,8 @@ export class OAuthReauthIdentityUnverifiedError extends Error {
   }
 }
 
+export { OAuthLoginRemediationError };
+
 class OAuthLoginSupersededError extends Error {
   constructor() {
     super("OAuth login was superseded before credential persistence");
@@ -465,6 +468,9 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     || error instanceof OAuthReauthIdentityUnverifiedError
     || error instanceof OAuthTokenRefreshBusyError
     || error instanceof OAuthTokenRefreshStaleError
+    // Operator remediation already written for the UI/CLI — keep it, or the dashboard
+    // replaces "log into Cline first" with an opaque retry hint.
+    || error instanceof OAuthLoginRemediationError
   ) return error.message;
   return "OAuth authentication failed. Check the OpenCodex account status and retry.";
 }

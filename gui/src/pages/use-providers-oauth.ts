@@ -135,7 +135,12 @@ export function useProvidersOAuth({
           : null;
         if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         if (!s) continue;
-        if (s.error) {
+        // A residual/settlement `error` alongside a usable credential is NOT a total failure:
+        // credential commit can succeed while post-login config reconciliation fails, and a
+        // failed re-login leaves the previous account intact. Prefer the live account, then
+        // surface the error so the operator still sees why the last attempt was incomplete.
+        const usable = s.loggedIn && !s.accounts?.some(a => a.needsReauth);
+        if (s.error && !usable) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const cancelled = /cancel/i.test(s.error);
           notify(
@@ -188,7 +193,9 @@ export function useProvidersOAuth({
           await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
           if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
-          if (sameIdentityAdd) {
+          if (s.error) {
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
+          } else if (sameIdentityAdd) {
             notify(t("prov.loginSameAccount", { provider: oauthLabel(provider) }), false);
           } else {
             notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
