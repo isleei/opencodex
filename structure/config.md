@@ -1,11 +1,23 @@
 # Config Surface
 
+Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+Configuration consumers retain the [refresh-lock ownership boundary](catalog.md#accounts-namespaces-and-pool-rotation); failing to establish a usable matching lock identity does not authorize deleting its path or replacing the refresh callback outcome with a path-probe error. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
 Connected-client catalog diagnostics use the [terminal rendering contract](runtime.md#cli-readiness-diagnostics) on the first connection and on every `ocx sync` refresh; stored catalog values are unchanged.
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
+
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
 ## Config surface
 
@@ -44,6 +56,13 @@ process-wide temp sequence, symlink target resolution, real-home test guard, own
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.
 
+Windows hardening there is applied once per write, not once per harden call. Both calls stay
+`required: true` and still fail the write closed, but the pre-rename call resolves through the
+`src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
+path still resolves to the object its descriptor holds, then re-attributes the memo to that same
+object so the freshness the data write moved does not read as a replacement. A different object, or
+one that cannot be observed, retires the memo and the pre-rename call performs the full sequence.
+
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
@@ -64,6 +83,11 @@ the secret itself.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
+The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its
+client annotation compares only the bounded service-token fingerprint with the validated client
+record; it does not call `loadConfig`, mutate permissions, or import the write-capable connect flow.
+All config publication continues through the existing required ACL-hardened writers above.
+
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
@@ -71,6 +95,8 @@ It is absent from the typed settings contract and cannot re-enable Spark quota t
 management API. Retirement does not migrate user-selected model ids or erase usage history.
 
 ## Config injection
+
+An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
@@ -164,8 +190,10 @@ discovery or catalog/cache replacement. Deterministic config and ownership refus
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
 Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
 transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
-its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
-writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its own writer, so `history_paginated_requires_native_writer` is not retryable: when the admitted
+candidate preserves any existing provider table, the transition writes config, profile,
+and `model_catalog_json`.
+On successful apply, the relabel job is skipped without spawning
 its Worker, and the reason travels in the human message and in the structured
 `historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
 unreadable state database, a rollout whose identity changed, a preflight that could not run —
@@ -173,12 +201,14 @@ describes a store that may be relabelable on the next attempt, so those keep the
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
 
-Standing the relabel down changes what the routing form may retire. Rows this home tagged
-`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
-normally retires that table precisely because the relabel migrates those rows back to `openai`
-in the same pass. With the relabel stood down, a table the home already published survives the
-write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
-rows are never modified in this state.
+Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
+Apply retains that existing definition before building the candidate witness, even when
+history preflight passes. The root-override form still selects the built-in provider for new
+conversations. Background history work is not atomic with config publication, so its future
+success cannot authorize retiring the old definition first. If native pagination begins after
+artifact commit or while the worker starts, the old references still resolve and any worker
+failure is reported. Paginated rollout bytes and thread rows remain untouched. Explicit
+restore and removal retain their separate guards below.
 
 Treating the refusal as a veto is what made every current Codex home unusable: paginated
 rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
@@ -186,10 +216,23 @@ app and the CLI fell back to their built-in model list. `ocx sync` reported succ
 because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
 refusal that survives is a real config or integrity failure again.
 
-Restore and removal keep the refusal. There the argument reverses: stripping the provider
-definition while its threads still point at it would orphan them, and those paths have no seam
-for keeping a compatibility table. A home that was already paginated therefore cannot yet be
-uninstalled through the product; that is tracked as open work, not as settled contract.
+Restore and removal now have that seam, so they no longer refuse on this one reason. The
+argument that forced the refusal still holds — stripping the provider definition while its
+threads still point at it would orphan them — but it only ever justified keeping the
+`[model_providers.opencodex]` table, not keeping the routing that aims plain `codex` at the
+proxy. Those are separable, and conflating them is what let `ocx uninstall` remove the proxy
+and leave the config pointing at it.
+
+On `history_paginated_requires_native_writer`, restore and removal take every OpenCodex root
+routing key out and retain the provider table verbatim, captured from the pre-transform bytes
+and re-appended into the same buffer so the file never passes through a state that names a
+provider it does not define — upstream fails the entire config load on a missing provider id,
+not the single thread. The history relabel is skipped rather than attempted, so paginated
+rollout bytes and thread rows stay untouched here exactly as they do on apply. The result is
+reported as `partial`, naming the retained lines and the command that removes them.
+`ocx restore --remove-codex-provider-table` is the explicit opt-in for full removal, and it
+states that conversations already tagged `opencodex` stop opening. Every other refusal reason
+keeps the hard refusal and the compensating rollback.
 
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.
@@ -200,6 +243,34 @@ the preflight is an early no-write guard, not an authorization token for a later
 
 `supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
 returns true.
+
+## Desktop compatibility switches report three things, not one
+
+`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
+`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
+and then converge the catalog, and a comment there claimed the injector rewrote the form;
+`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
+so the injected shape stayed as it was until a separate `ocx sync`.
+
+The route now runs the real injection after catalog convergence and after the config mutation
+lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
+lock, so awaiting the injector inside that transaction would invert the order — and reports
+three separate facts per switch: the **stored** value in `config.json`, the **effective** value
+this bind and role will actually produce, and whether `config.toml` was **applied**, with the
+reason and retryability when it was not. `src/codex/desktop-switches.ts` owns that projection.
+
+Effective values come from `isEffectiveCodexDesktopAuthless` and
+`isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
+of the predicate, because the reporting answer and the injection answer diverging is the defect
+being fixed: a non-loopback bind without the unauthenticated loopback listener drops the
+authless flag while the API read back the configured `true`.
+
+The report also states the auth-source consequence. The flag decides `requires_openai_auth` in
+the injected provider table, which is what Codex reads to decide whether to ask the user to
+sign in at all, so flipping it changes whose identity is in use and the user is told at the
+moment they change it. The pre-existing top-level `codexDesktopAuthless` and
+`codexClientCompaction` booleans keep reporting the configured value for compatibility; the
+report is additive.
 
 ## Profile and fast tier
 
@@ -267,7 +338,7 @@ The unregistered executor CLI module stores Remote Workspace state separately fr
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 `dropCodexSafetyBuffering` is an optional boolean, default false. Invalid API candidates reject;
 malformed persisted values stay disabled. It controls only the allowlisted client-output hints

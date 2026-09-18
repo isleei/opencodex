@@ -1,7 +1,9 @@
 # Chat Provider Compatibility
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).
 
 Native Codex Spark-specific request exceptions are absent. General Lite and namespace repair
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
@@ -55,6 +57,15 @@ messages until the round completes, reattaching real results to their original c
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
 (Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
 
+The native Ollama wire carries the same contract. `src/adapters/ollama-native.ts`
+`buildNativeMessages` defers `user`/`developer` messages that arrive while a batch is open and
+releases them after the tool messages, and answers a call with no result anywhere in the replayed
+history with the same `[ocx] no tool result was recorded for "<name>"` marker. The shape it
+absorbs is ordinary Codex history, not a malformed one: Codex records mid-turn items (a
+`PostToolUse` hook verdict, a context notice) between an assistant `tool_calls` message and that
+call's own result. The strict pair checks (orphan result, duplicate result, result naming another
+tool) still throw on both wires (#4842).
+
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
 so each oversized id and all matching call/output items receive the same deterministic,
@@ -62,10 +73,20 @@ request-local alias. Raw API-key continuations deliberately preserve ids because
 continuation may reference a call stored upstream under its original id; proxy-expanded API-key
 replays are explicit and receive the same repair.
 
-Separately, Meta Muse Responses (`src/responses/muse-tool-name-alias.ts`) aliases function *tool
-names* that exceed 64 characters or contain characters outside `[a-zA-Z0-9_-]` on `api.meta.ai`
-only. That map is not the call-id repair: it covers tools, `additional_tools`, history calls, and
-`tool_choice`, then restores original names inbound.
+Tool-name normalization stays adapter-scoped. The translated Chat Completions path uses a
+request-scoped registry in `src/adapters/openai-chat/`: only flattened namespaced names over 64
+characters receive a deterministic, charset-safe alias. Catalog declarations, replayed calls and
+`tool_choice` share that registry, and streamed or buffered echoes restore to the original flattened
+name before the Responses bridge restores `{namespace, name}`. Names at or below the bound and bare
+names pass through unchanged, except declarations matching the reserved alias shape; those are
+re-aliased so they cannot shadow an identity-derived alias.
+
+The 64-character bound is a Chat Completions and strict-gateway compatibility concern: Command Code
+rejects a 66-character function name (#4679). Upstream Codex raised its own MCP ceiling to 128 bytes
+in `openai/codex#39594` because native Responses accepts 128, so that Responses limit does not govern
+this translated wire. Kiro (`src/adapters/kiro-tools.ts`), Google (its wire compiler), and Meta Muse
+Responses (`src/responses/muse-tool-name-alias.ts`, gated to `api.meta.ai`) each retain their own
+equivalent normalization and restoration.
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
@@ -130,6 +151,33 @@ their outputs in call order; hook-injected messages that split the batch move af
 dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
 and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
+
+That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
+Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),
+so `kimi` and `kimi-code` carry the flag as well. The flag is inert while those presets use the Chat
+wire and takes effect when a row is configured onto `openai-responses`, which is the configuration the
+report exercised. xAI Grok 4.6/4.5 subscription Responses carries the same flag: after a mid-stream
+interrupt, Codex can replay a `function_call` with hook-injected developer context between it and
+its output, and later turns 400. The adjacency pass itself still does not invent duplicate or
+backwards pairs. No upstream specification documents the adjacency requirement; the evidence is the observed
+400 and DeepSeek's identical failure shape, which is why this stays a per-provider capability rather
+than a wire-wide default — upstream Codex leaves an intervening developer message where it is.
+
+A mid-stream interrupt produces a second, different shape: a call whose output never arrived at all.
+That is `requiresPairedResponsesToolResults`, a separate capability, and the separation is the whole
+point. Adjacency reorders items the upstream would accept in some order; pairing synthesizes an item
+the client never sent, which puts a tool turn into the conversation that did not happen. The evidence
+differs too — #4726 shows Kimi accepting a call with no result at all, so `kimi` and `kimi-code` keep
+adjacency and do not receive placeholders. `xai` carries both. `statelessResponses` implies pairing,
+which is how DeepSeek already had it: an upstream that stores nothing cannot resolve the missing half
+from its own history either.
+
+xAI's public Responses API is stateful (`store` defaults true; `previous_response_id` continues a
+stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
+synthesizes an honest unknown-status placeholder without touching `store` or
+`previous_response_id`: repairing an interrupted history must not cost the thread its server-side
+state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
+the conversation can resolve the pair itself.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
@@ -336,6 +384,12 @@ The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images
 real image blocks rather than flattening them to the text `[image]`, and orders image
 blocks chronologically — history before current — so attachment order matches the
 prose the model reads beside them. Vendor tool execution stays disabled on both
-adapters, and Qoder's explicit refusal of original images is unchanged.
+adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
+container followed by a named bare or namespaced invoke control line in either output channel; it
+preserves preceding answer text, never promotes vendor prose into execution authority,
+and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
+refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.

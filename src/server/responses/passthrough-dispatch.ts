@@ -1,3 +1,7 @@
+import { createSteeringSettingsNormalizer } from "./native-steering-policy";
+import { nativeResponseControlEligible } from "./native-response-control";
+import { NativeInjectionReplay } from "./native-injection-replay";
+import { NativeSteeringReplay } from "./native-steering-replay";
 import type {
   ResponsesRequestContext,
   ResponsesAdmissionState,
@@ -10,7 +14,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
-import { rememberResponseState } from "../../responses/state";
+import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
@@ -29,6 +33,7 @@ import {
   unwrapUpstreamRetryEvidenceError,
   codexProbeLeaseId,
   codexProbeQuotaScope,
+  codexTransientProbeGrant,
   createCodexReserveDispatchGuard,
 } from "../../codex/auth-context";
 import {
@@ -60,7 +65,6 @@ import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v
 import {
   recordAdapterReasoning,
   recordAdapterTier,
-  noteAttemptSend,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
@@ -80,6 +84,7 @@ import {
   safeHostLabel,
   storedPoolReplayDispatchNotifier,
 } from "./fetch-helpers";
+import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { clientCancelledResponse } from "./core-errors";
 import {
   upstreamHostCircuitOpenResponse,
@@ -101,6 +106,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
@@ -171,6 +177,7 @@ export async function preparePassthroughExchange(
     | "replayOAuthCredentialSnapshot"
     | "genericFailovers"
     | "applyFailoverSnapshot"
+    | "noteRoutedAttemptSend"
   >,
   responseEffects: Pick<
     ResponsesEffects,
@@ -248,6 +255,19 @@ export async function preparePassthroughExchange(
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
         rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true))
       : undefined;
+    if (options.nativeControl && nativeResponseControlEligible(route.provider, options.nativeControl)
+      && options.inboundTransport === "websocket" && !options.comboAttempt) {
+      const body = parsed._rawBody as Record<string, unknown>;
+      if (options.nativeControl.kind === "steering") {
+        options.nativeControl.normalizeContinuation = createSteeringSettingsNormalizer(parsed, route, config, req.headers);
+      }
+      const Replay = options.nativeControl.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
+      options.nativeControl.replayFactory = () => new Replay(body.input, (input, response) => {
+        if (passthroughRecordEligible && !isBodyNonPersistable(body)) {
+          rememberResponseState({ ...body, input }, response, undefined, responseStateOptions(true));
+        }
+      });
+    }
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
         `[responses] previous_response_id ${parsed.previousResponseId} not found in local replay state `
@@ -346,10 +366,13 @@ export async function preparePassthroughExchange(
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
-    // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
-    // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
-    // authorization checks instead of admitting the bare name into the declared set: for `exec`,
-    // the latter would also authorize the unrelated code-mode helper names.
+    // `buildToolBridgeMaps` adds each eligible bare alias to `declaredToolNames` and `toolNsMap`
+    // (one authorized identity claims the bare name). `refreshUndeclaredToolGuard` normally copies
+    // those entries into `declaredWireToolNames`, but passthrough restoration runs before the
+    // undeclared-tool guard, so restore that request-bounded identity here, before authorization
+    // checks. `exec` uses separate handling: its bridge alias is copied into the declared set only
+    // when the client itself declared bare `exec`, because otherwise code-mode normalization could
+    // authorize the unrelated code-mode helper names.
     const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
       [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
         alias === identity.name
@@ -736,6 +759,7 @@ export async function preparePassthroughExchange(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(admissionState.authCtx),
           probeQuotaScope: codexProbeQuotaScope(admissionState.authCtx),
+          transientProbe: codexTransientProbeGrant(admissionState.authCtx),
           writerGeneration: admissionState.authCtx.writerGeneration,
         });
       }
@@ -752,13 +776,22 @@ export async function preparePassthroughExchange(
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
-          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+          // The pool-wide recovery window measures recovery traffic against observed demand,
+          // and this is where demand is observed: `recovery === undefined` is a new request's
+          // first send, everything after it is the same request trying again. Without this the
+          // ratio has no denominator and the window collapses to its quiet-pool floor, which
+          // would throttle recovery on a busy proxy exactly as hard as on an idle one (#4701).
+          if (recovery === undefined) classifyPoolRecoveryDispatch("initial");
+          transportState.noteRoutedAttemptSend(passthroughEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -848,13 +881,16 @@ export async function preparePassthroughExchange(
             if (allowance.permit && !allowance.permit.use()) {
               throw new SendBudgetExhaustedError(safeHostLabel(request.url));
             }
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
+            transportState.noteRoutedAttemptSend(passthroughEstimate, innerRecovery ?? recovery);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
               body: request.body,
             }, innerRecovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -946,7 +982,7 @@ export async function preparePassthroughExchange(
         // every other build site; a replay is exactly when a grown payload reappears.
         const replayBodyRefusal = refuseOversizedOutboundBody(request);
         if (replayBodyRefusal) return replayBodyRefusal;
-        noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
+        transportState.noteRoutedAttemptSend(passthroughEstimate, "oauth-401");
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
           { method: request.method, headers: request.headers, body: request.body },
@@ -961,6 +997,9 @@ export async function preparePassthroughExchange(
           // here on is a genuine transport attempt.
           storedPoolReplayDispatchNotifier(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -1075,13 +1114,16 @@ export async function preparePassthroughExchange(
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401");
+            transportState.noteRoutedAttemptSend(passthroughEstimate, recovery ?? "oauth-401");
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -1105,6 +1147,10 @@ export async function preparePassthroughExchange(
     // the same quorum, cooldown and request budget here, before any client bytes flow.
     if (
       upstreamResponse.status === 429
+      // Not a provider rate limit when this proxy synthesized it for a refused reset
+      // replay; rotating accounts on it would re-send an inference that may already
+      // have run and would cool down an account that refused nothing.
+      && !isNonReplayableResponse(upstreamResponse)
       && transportState.genericFailoverAccountId
       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -1159,6 +1205,7 @@ export async function preparePassthroughExchange(
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
     while (
       upstreamResponse.status === 429
+      && !isNonReplayableResponse(upstreamResponse)
       && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
@@ -1192,13 +1239,16 @@ export async function preparePassthroughExchange(
           recovery => {
             // The first send of every replay is itself a rate-limit retry; inner transient-5xx
             // recoveries keep their own label (recovery is provided for those).
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "rate-limit-429");
+            transportState.noteRoutedAttemptSend(passthroughEstimate, recovery ?? "rate-limit-429");
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,

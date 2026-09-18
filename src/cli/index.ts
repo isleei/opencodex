@@ -13,9 +13,22 @@ try {
     /* best-effort */
   }
 }
-import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
+import {
+  currentExternalCodexModelProvider,
+  restoreNativeCodex,
+  restoreNativeCodexAsync,
+  shouldInjectApiAuthHeader,
+} from "../codex/inject";
+// Straight from the owning modules rather than the facade: these are teardown-reporting
+// helpers, not part of the injection surface, and `inject.ts` sits under a size cap that
+// exists to stop it collecting exactly this kind of passthrough.
+import { readOcxProviderTableBlock } from "../codex/inject/remove";
+import {
+  describeRetainedCodexProviderTable,
+  type RetainedCodexProviderTable,
+} from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
+import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
   describeHistoryJobFailure,
   resolveCodexHistoryJobTarget,
@@ -46,6 +59,7 @@ import {
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
+  pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
@@ -116,6 +130,12 @@ function reportShellHookFailure(result: { state: "installed" | "absent" | "faile
   if (result.state !== "failed") return;
   console.warn(`   Claude shell hook not reconciled${result.reason ? `: ${result.reason}` : ""}`);
   console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
+}
+
+function reportRetainedCodexProviderTable(retained: RetainedCodexProviderTable): void {
+  console.log(`   ${describeRetainedCodexProviderTable(retained)}`);
+  console.log("   Retained config lines:");
+  for (const line of retained.lines) console.log(`      ${line}`);
 }
 
 async function refreshOwnedRaycastCatalog(
@@ -785,20 +805,44 @@ async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
  *
  * The distinction exists because `ocx update` must proceed for the first and abort for the
  * second, and it can only see an exit code (#3008).
+ *
+ * `historyDeferred` is the third kind (#4718). The Codex history preflight refuses BEFORE
+ * the config half runs, so nothing was restored at all: config, catalog, history and
+ * provenance are untouched and the client is still routed at the proxy that just stopped.
+ * Like `historyOnly` the proxy is genuinely down, so an update may replace package files.
+ * Unlike `historyOnly` the obligation was not performed, so the receipt must survive.
  */
-async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boolean; other: boolean }> {
+async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boolean; historyDeferred: boolean; other: boolean }> {
   let historyOnly = false;
+  let historyDeferred = false;
   let other = false;
   try {
     const result = await restoreNativeCodexAsync();
-    if (result.success) console.log(`↩️  ${result.message}`);
+    if (result.success) {
+      console.log(`↩️  ${result.message}`);
+      if (result.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(result.retainedCodexProviderTable);
+      }
+    }
     else {
       // Codex history is the one restore whose failure leaves the runtime consistent: the
       // manifest is retained and the routed metadata is untouched. Config and catalog are
       // not — a client reads those, so their failure is a real teardown failure.
       const artifacts = result.artifacts;
       const configOrCatalogFailed = artifacts.config.state === "failed" || artifacts.catalog.state === "failed";
-      if (!configOrCatalogFailed && artifacts.history.state === "failed") historyOnly = true;
+      // A preflight refusal reports every artifact as `skipped` because none of them were
+      // attempted. Reading the states alone cannot tell that apart from an ownership
+      // refusal, so the structured reason carries it and the states are still required to
+      // agree — a refusal that somehow reports a failed artifact is not this case.
+      // A degraded restore has no refusal reason and reports config as partial, so it cannot
+      // enter this branch: its config obligation was discharged and the stop receipt must be
+      // released rather than preserved.
+      const preflightRefused = result.historyPreflightRefusal !== undefined
+        && artifacts.config.state === "skipped"
+        && artifacts.catalog.state === "skipped"
+        && artifacts.history.state === "skipped";
+      if (preflightRefused) historyDeferred = true;
+      else if (!configOrCatalogFailed && artifacts.history.state === "failed") historyOnly = true;
       else other = true;
       console.error(`⚠️  ${result.message}`);
     }
@@ -816,7 +860,7 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
     other = true;
     console.error(`⚠️  Grok config restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { historyOnly, other };
+  return { historyOnly, historyDeferred, other };
 }
 
 async function handleStop() {
@@ -860,6 +904,11 @@ async function handleStop() {
   };
   let stopFailed = false;
   let historyOnlyFailure = false;
+  /**
+   * Obligations this run deliberately kept because the Codex history preflight refused
+   * before restoring anything (#4718). Non-null selects the deferred exit code.
+   */
+  let historyDeferredNonces: string[] | null = null;
   // Only Task Scheduler respawns after a successful stop (#764), so only it earns the
   // restart-window wait; launchd, systemd and WinSW are down when they say so.
   let schedulerCanRespawn = false;
@@ -1138,6 +1187,7 @@ async function handleStop() {
     }
     const restore = await restoreSharedClientStateAfterStop();
     if (restore.other) stopFailed = true;
+    else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
     else if (restore.historyOnly) historyOnlyFailure = true;
     // The obligation is discharged whether or not history metadata finalized: config and
     // catalog are what a client reads, and `restore.other` already fails the stop.
@@ -1145,7 +1195,16 @@ async function handleStop() {
     // Each nonce names its own file, so a clear can only ever remove the obligation it
     // names — never one a concurrent stop wrote. Both this run's claim and every inherited
     // receipt it proved discharged are released together.
-    if (!restore.other) {
+    //
+    // A history-preflight refusal is the exception: it restored nothing, so there is
+    // nothing to discharge. Clearing here would drop a real obligation on the floor and
+    // leave the client config pointing at a proxy that is gone, with nothing on disk
+    // saying so — which is the whole failure the receipt exists to prevent (#4718).
+    if (restore.historyDeferred) {
+      console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
+      console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
+    }
+    if (!restore.other && !restore.historyDeferred) {
       const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
       for (const nonce of discharged) {
         // A receipt that survives its discharge re-triggers recovery forever, so a failed
@@ -1185,6 +1244,17 @@ async function handleStop() {
   // still wins: it is the stronger signal.
   if (stopFailed) process.exitCode = 1;
   else if (historyOnlyFailure) process.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+  // The deferred code says "the only obligations left are the ones I just decided to
+  // keep". It is read across a process boundary by an updater that will replace package
+  // files on the strength of it, so this run has to be able to prove the claim: if any
+  // other obligation is sitting in the home — quarantined, or a concurrent stop's — the
+  // claim is false and the ordinary failure code is the honest answer. That is also the
+  // behaviour before #4718, so the fallback loses nothing that used to work.
+  else if (historyDeferredNonces) {
+    process.exitCode = pendingTeardownsAreExactly(historyDeferredNonces)
+      ? STOP_HISTORY_DEFERRED_EXIT_CODE
+      : 1;
+  }
   return !stopFailed;
 }
 
@@ -1314,6 +1384,9 @@ async function handleUninstall() {
     await runStep("native Codex restored", async () => {
       const r = await restoreNativeCodexAsync();
       if (!r.success) throw new Error(r.message);
+      if (r.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(r.retainedCodexProviderTable);
+      }
     });
 
     await runStep("Grok Build config restored", () => {
@@ -1460,6 +1533,18 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  if (status.json.startup.routingKind === "native") {
+    let retainedProviderTable = false;
+    try {
+      retainedProviderTable = readOcxProviderTableBlock() !== null;
+    } catch {
+      // The routing snapshot owns unreadable-config reporting. A later read race must not
+      // turn this diagnostic command into a teardown failure.
+    }
+    if (retainedProviderTable) {
+      console.log(`   ⚠️  Codex provider table retained${local}: [model_providers.opencodex] remains while root routing is native. Remove with 'ocx restore --remove-codex-provider-table'; tagged conversations will stop opening.`);
+    }
+  }
   console.log(`   Service: ${status.json.service.summary}${local}`);
   console.log(`   ${status.json.codexShim.summary}${local}`);
   console.log(`   Codex runtime: ${status.json.codexRuntime.path}${local}`);

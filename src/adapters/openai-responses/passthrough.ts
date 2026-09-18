@@ -34,7 +34,7 @@ import {
   createAdapterTierMetadata,
 } from "../../providers/fastwire";
 import { mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
+import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
@@ -59,6 +59,19 @@ function clampResponsesMaxOutputTokens(body: unknown, provider: OcxProviderConfi
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 
+/**
+ * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
+ * plaintext reasoning and cannot consume opaque reasoning state. The two existing flags are
+ * current evidence for that one provider contract, not equivalent capabilities: preservation
+ * keeps plaintext reasoning on the wire, while adjacency marks its strict tool-history shape.
+ * The moment a second provider needs this behavior, replace this derivation with an explicit
+ * registry capability rather than extending the inference.
+ */
+export function requiresPlaintextReasoningReplay(provider: OcxProviderConfig): boolean {
+  return provider.preserveResponsesReasoningContent === true
+    && provider.requiresAdjacentResponsesToolResults === true;
+}
+
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
 export const FORWARD_HEADERS = [
@@ -81,6 +94,16 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
   CODEX_RESPONSES_LITE_HEADER,
 ];
+
+/** Preserve the caller fingerprint unless the provider explicitly owns that header. */
+function applyCallerUserAgentFallback(
+  headers: Record<string, string>,
+  incoming: IncomingMeta,
+): void {
+  if (Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) return;
+  const userAgent = incoming.headers.get("user-agent");
+  if (userAgent) headers["User-Agent"] = userAgent;
+}
 
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
@@ -241,6 +264,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }
+      // Some Responses-compatible gateways select their Codex compatibility path from the real
+      // client fingerprint. This is a single non-credential fallback, not broader caller-header
+      // forwarding. Static provider headers remain authoritative in either auth mode.
+      applyCallerUserAgentFallback(headers, incoming);
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
@@ -263,19 +290,31 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
       const stateless = provider.statelessResponses === true;
+      const adjacentToolResults = provider.requiresAdjacentResponsesToolResults === true;
+      // Adjacency reorders items the upstream would accept in some order. Pairing synthesizes an
+      // item the client never sent, which is a larger claim about the conversation, so it is its
+      // own capability: Kimi carries the adjacency flag but accepts a dangling call (#4726) and
+      // must not start receiving placeholders it never needed.
+      const pairedToolResults = provider.requiresPairedResponsesToolResults === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);
       // A replay miss can leave a function_call_output whose paired function_call sat
       // in the prefix that was never expanded. A stateless upstream cannot resolve the
       // pair from its own storage either, so it needs the same repair the forward
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
+      // A parser can also 400 on a function_call with no matching output at all. DeepSeek gets
+      // that repair through statelessResponses. xAI cannot be marked stateless: its Responses API
+      // stores conversations for 30 days and documents previous_response_id. So it carries the
+      // pairing capability instead, which reuses the orphan-call placeholder without touching
+      // store or previous_response_id.
       if (provider.annotateEmptyToolOutputs === true) {
         outBody = annotateEmptyResponsesToolOutputs(outBody, true);
       }
-      if (forward || stateless) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
+      const synthesizeMissingCallOutputs = !forward && (stateless || pairedToolResults);
+      if (forward || stateless || pairedToolResults) {
+        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
       }
-      if (provider.requiresAdjacentResponsesToolResults === true) {
+      if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
@@ -309,6 +348,20 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = backfillWebSearchQueries(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        // The same class of private field, one level up, but keyed on the DESTINATION rather than
+        // on the canonical surface alone. `src/server/responses/compact.ts` spreads the caller's
+        // raw body into the native `/responses/compact` request without passing through this
+        // adapter, and that endpoint is offered only to OpenAI-operated destinations
+        // (supportsNativeResponsesCompactEndpoint). Stripping on the canonical predicate here
+        // would make the two paths disagree for `openai-apikey`; stripping on the destination
+        // keeps every OpenAI-operated route byte-identical and removes the field exactly where it
+        // is known to break, which is a gateway this proxy does not operate.
+        //
+        // Placed before the routed compaction body is built and before serialization, so the HTTP,
+        // routed-compaction and WebSocket outbounds are all covered by this one call.
+        if (!isOpenAiOperatedResponsesDestination(provider)) {
+          outBody = stripCanonicalOnlyTopLevelFields(outBody);
+        }
         outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
@@ -377,6 +430,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      // Providers with the strict plaintext tool-continuation contract cannot consume any
+      // encrypted reasoning blob, including one whose provenance is unknown. Combo routing
+      // separately refuses a proven cross-route replay when no plaintext exists; this final
+      // serializer guard ensures the foreign opaque state is never forwarded regardless.
       const sanitizedBody = normalizeToolSchemas(
         stripItemIdsWhenUnstored(
           stripInvalidItemIds(
@@ -390,7 +447,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
-                  stripEncryptedContent: threadServingIdentityChanged,
+                  stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                 },
               ),
               provider,

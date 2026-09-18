@@ -17,6 +17,7 @@ import type { ProviderRegistryEntry } from "./types";
 import {
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
+  ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
@@ -281,6 +282,17 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
         forwardCallerServiceTier: false,
       },
     },
+    // Grok 4.6/4.5 OAuth Responses replays Codex tool history. After a mid-stream 502/reset,
+    // the client can resend a function_call without a matching output, or with hook-injected
+    // developer context between the pair. Google already synthesizes a missing tool_result
+    // (#2199). xAI's Responses parser does not, so the next turns 400 and the thread snowballs.
+    // Reuse the existing adjacency capability (Kimi #4726, DeepSeek #1292). Do not set
+    // statelessResponses: xAI stores responses for 30 days and documents previous_response_id.
+    // https://docs.x.ai/developers/model-capabilities/text/comparison
+    requiresAdjacentResponsesToolResults: true,
+    // The dangling half of the same failure: a call whose output never arrived. Kimi accepts that
+    // shape, so this is a second capability rather than a widening of the one above.
+    requiresPairedResponsesToolResults: true,
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
     // inputModalities undefined, and deriveComboCatalogModel defaults an undefined member to
@@ -383,6 +395,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Log in with your Claude account",
     models: [...ANTHROPIC_MODELS],
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
@@ -403,6 +416,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     models: [...ANTHROPIC_MODELS],
     liveModels: true,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
@@ -420,6 +434,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
     // Evidence: https://platform.kimi.com/docs/api/chat
     promptCacheKey: true,
+    // Kimi's Responses endpoint rejects hook-provided context between a tool call and
+    // its matching result (#4726), the same strict shape DeepSeek exposed in #1292.
+    // The flag is inert while this preset uses the Chat wire.
+    requiresAdjacentResponsesToolResults: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",

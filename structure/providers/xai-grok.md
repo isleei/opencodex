@@ -1,7 +1,17 @@
 # xAI Grok Provider
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 xAI uses the same shared credential and delivery policies through the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+One Responses capability is seeded for xAI alone: `requiresPairedResponsesToolResults`, which
+answers a replayed tool call whose output never arrived. It is deliberately not the same flag as
+`requiresAdjacentResponsesToolResults`, which xAI also carries and shares with the Kimi presets.
+The contract for both, and the reason they do not collapse into one, is specified in
+[chat-compat](./chat-compat.md); it is not restated here.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -10,7 +20,7 @@ Codex-native retirement is scoped to OpenAI catalog/quota evidence. Shared Respo
 retains xAI provider behavior; see
 [the catalog boundary](../catalog.md#shared-catalog).
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
@@ -68,7 +78,7 @@ malformed, gapped, oversized, contradictory, failed, or incomplete streams stay 
 - **Safety & Idempotency:** Managed via `src/grok/reset-coupon-ledger.ts` using UUIDv4 operation tracking before upstream dispatch to prevent duplicate consumption during network flakes.
 - **Surfaces:** `ocx account grok-reset-coupons` in the terminal, and the dashboard at Providers > xAI Grok > Accounts, where each OAuth row carries a ticket badge with its remaining count and opens a redemption dialog (`gui/src/hooks/useGrokResetCoupons.ts`, `gui/src/components/provider-workspace/GrokResetCoupons.tsx`). The dashboard reads one `GET /api/grok/reset-coupons` per account with at most three in flight, always sends an explicit `tokenId` and a client-minted `operationId`, and treats redemption truth as the settled `code` rather than HTTP 200 — a replayed *failure* returns 200 with `replayed: true`. After a request times out it issues no further consume call, because a redemption whose ledger record is still `open` re-executes.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 
@@ -95,6 +105,8 @@ Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.m
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 
 Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged.
+
+[Anthropic seed image metadata](../runtime.md#capability-aware-image-admission) is provider-scoped; xAI model metadata and transport behavior remain unchanged.
 
 Provider-scoped catalog hints remain isolated by provider in `src/providers/registry/entries-core.ts`. The
 OpenCode Go `deepseek-v4.1-flash` 1,048,576-token context hint does not change xAI model metadata or
@@ -141,3 +153,9 @@ Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#a
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

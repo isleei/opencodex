@@ -401,28 +401,38 @@ describe("provider registry parity", () => {
       defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "glm-5.3", "glm-5.3-flash", "glm-5.2",
+        "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
-        "qwen3.7-max": ["text", "image"],
+        "qwen3.7-max": ["text"],
       },
       modelReasoningEfforts: {
         "qwen3.8-max": ["low", "medium", "xhigh"],
+        "qwen3.8-flash": ["low", "medium", "xhigh"],
       },
-      modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
+      modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh", "qwen3.8-flash": "xhigh" },
       modelContextWindows: {
-        "qwen3.8-max": 983_616,
+        "qwen3.8-max": 1_000_000,
         "qwen3.7-max": 1_000_000,
       },
-      noVisionModels: ["glm-5.3", "glm-5.2"],
+      modelMaxOutputTokens: {
+        "qwen3.8-max": 131_072,
+        "deepseek-v4-pro": 393_216,
+      },
+      noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
+      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
+      // phantom glm-5.3 pair must stay out of this preset's models list.
+
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
-      .toEqual(["qwen3.8-max"]);
+      .toEqual(["qwen3.8-max", "qwen3.8-flash"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .not.toContain("qwen3.8-max");
+    expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
+      .not.toContain("qwen3.8-flash");
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .toContain("qwen3.7-max");
   });
@@ -750,6 +760,27 @@ describe("provider registry parity", () => {
     });
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"].models).toEqual(anthropicOauth?.models);
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"].modelContextWindows).toEqual(anthropicOauth?.modelContextWindows);
+  });
+
+  test("Anthropic providers seed image input while preserving explicit model overrides", () => {
+    for (const id of ["anthropic", "anthropic-apikey"]) {
+      const entry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
+      const seed = providerConfigSeed(entry);
+      expect(entry.models!.length).toBeGreaterThan(0);
+      for (const model of entry.models!) {
+        expect(seed.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      }
+
+      const provider: OcxProviderConfig = {
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        modelInputModalities: { "claude-sonnet-5": ["text"] },
+      };
+      enrichProviderFromRegistry(id, provider);
+      expect(provider.modelInputModalities?.["claude-sonnet-5"]).toEqual(["text"]);
+      expect(provider.modelInputModalities?.["claude-fable-5-1"]).toEqual(["text", "image"]);
+      expect(provider.modelInputModalities?.["unknown-model"]).toBeUndefined();
+    }
   });
 
   test("Anthropic providers advertise an effort ladder for every model on both auth flows", () => {

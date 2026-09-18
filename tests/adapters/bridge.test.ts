@@ -1344,6 +1344,60 @@ describe("citation markers never reach the client (#3150)", () => {
   });
 });
 
+describe("terminal stop classification preserves final answer phases (#4855)", () => {
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "response.completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "response.incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "response.incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "response.completed", "final_answer", undefined],
+  ] as const)("streaming terminal %s classifies the final message phase", async (
+    _label,
+    terminal,
+    terminalEvent,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ]), "routed/model"));
+    const message = frames.find(frame =>
+      frame.event === "response.output_item.done"
+      && (frame.data.item as Record<string, unknown>)?.type === "message"
+    )?.data.item as Record<string, unknown>;
+    const response = frames.find(frame => frame.event === terminalEvent)?.data.response as Record<string, unknown>;
+
+    expect(message.phase).toBe(expectedPhase);
+    expect((response.output as Record<string, unknown>[])[0]?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "completed", "final_answer", undefined],
+  ] as const)("buffered terminal %s classifies the final message phase", (
+    _label,
+    terminal,
+    expectedStatus,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const response = buildResponseJSON([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ], "routed/model");
+    const message = (response.output as Record<string, unknown>[])[0];
+
+    expect(response.status).toBe(expectedStatus);
+    expect(message?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+});
+
 describe("Responses bridge stopReason threading (issue #246)", () => {
   test("done with stopReason max_tokens emits response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
@@ -1607,5 +1661,77 @@ describe("array-backed string accumulation", () => {
     } finally {
       budget.dispose();
     }
+  });
+});
+
+describe("declared tool enforcement is separate from declared tool normalization (#4735)", () => {
+  // The chat and Anthropic wires delegate tool validation to the client's own runner, so this
+  // proxy relays a call it did not see declared instead of ending the turn with a 502. What it
+  // must NOT do is stop normalizing: the declared set is also the catalog that maps a
+  // provider-invented name back to the tool the client actually asked for. Withholding the set
+  // to disable the guard takes normalization with it.
+  const undeclaredCall: AdapterEvent[] = [
+    { type: "tool_call_start", id: "call_1", name: "todo_write" },
+    { type: "tool_call_delta", arguments: "{}" },
+    { type: "tool_call_end" },
+    { type: "done" },
+  ];
+  const inventedNamespaceCall: AdapterEvent[] = [
+    { type: "tool_call_start", id: "call_1", name: "default.lookup" },
+    { type: "tool_call_delta", arguments: "{}" },
+    { type: "tool_call_end" },
+    { type: "done" },
+  ];
+
+  test("buffered: enforcement off relays an undeclared call instead of failing the turn", () => {
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    });
+    expect(json.status).not.toBe("failed");
+    expect(json.error).toBeUndefined();
+    const output = json.output as Record<string, unknown>[];
+    expect(output.find(item => item.name === "todo_write")).toBeDefined();
+  });
+
+  test("streaming: enforcement off relays an undeclared call instead of failing the turn", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay(undeclaredCall), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    }));
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
+    expect(JSON.stringify(frames)).toContain("todo_write");
+  });
+
+  test("enforcement off still normalizes a provider-invented default namespace", () => {
+    // This is what breaks if the guard is disabled by withholding `declaredToolNames`:
+    // `normalizeDeclaredToolName` returns the raw name when the set is undefined, so the client
+    // receives `default.lookup` — a tool it never declared — and errors on its own side.
+    const json = buildResponseJSON(inventedNamespaceCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    });
+    const output = json.output as Record<string, unknown>[];
+    expect(output.find(item => item.name === "lookup")).toBeDefined();
+    expect(output.find(item => item.name === "default.lookup")).toBeUndefined();
+  });
+
+  test("enforcement stays on by default, so the Responses wire keeps failing closed (#1700)", () => {
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+    });
+    expect(json.status).toBe("failed");
+    expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
+  });
+
+  test("an explicitly empty declared catalog still authorizes nothing", () => {
+    // A request that declares an empty tool list is making a statement, not omitting one. The
+    // passthrough guard already reads it that way (`clientExplicitWireToolCatalog` in
+    // src/server/responses/passthrough-dispatch.ts), and the bridge must agree.
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set<string>(),
+    });
+    expect(json.status).toBe("failed");
+    expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
   });
 });
