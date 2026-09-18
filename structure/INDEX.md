@@ -138,12 +138,19 @@ for it; see [`AGENTS.md`](AGENTS.md).
 
 | Source path | Why |
 | --- | --- |
+| `src/acp/` | fork-only ACP coding-agent surface; no upstream structure doc claims it yet |
 | `src/bridge.ts` | no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference |
 | `src/bridge/` | no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has |
+| `src/cloud/` | fork-only cloud sync (OneDrive) engine; no upstream structure doc claims it yet |
+| `src/mcp/` | fork-only multi-client MCP config engine; covered by PROJECT.md outside structure/ |
+| `src/pi/` | fork-only Pi client integration; no upstream structure doc claims it yet |
 | `src/quota/` | no doc names a path here; quota evidence is described in providers/openai-tiers.md in prose only |
 | `src/service-manager-probe.ts` | no doc names this file; service probing is described in ops/service-and-sidecars.md without a path reference |
+| `src/sessions/` | fork-only cross-agent session hub; no upstream structure doc claims it yet |
 | `src/sidecar/` | no doc names a path here; ops/service-and-sidecars.md describes sidecar behavior in prose only |
+| `src/skills/` | fork-only centralized skills store; covered by PROJECT.md outside structure/ |
 | `src/types/` | shared declarations plus the tool-name and wire-pin resolvers, which no doc currently describes |
+| `src/workflow/` | fork-only codex-led workflow engine; no upstream structure doc claims it yet |
 
 ## Decision records
 

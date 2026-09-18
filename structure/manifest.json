@@ -409,6 +409,34 @@
       {
         "path": "src/types/",
         "reason": "shared declarations plus the tool-name and wire-pin resolvers, which no doc currently describes"
+      },
+      {
+        "path": "src/acp/",
+        "reason": "fork-only ACP coding-agent surface; no upstream structure doc claims it yet"
+      },
+      {
+        "path": "src/cloud/",
+        "reason": "fork-only cloud sync (OneDrive) engine; no upstream structure doc claims it yet"
+      },
+      {
+        "path": "src/mcp/",
+        "reason": "fork-only multi-client MCP config engine; covered by PROJECT.md outside structure/"
+      },
+      {
+        "path": "src/pi/",
+        "reason": "fork-only Pi client integration; no upstream structure doc claims it yet"
+      },
+      {
+        "path": "src/sessions/",
+        "reason": "fork-only cross-agent session hub; no upstream structure doc claims it yet"
+      },
+      {
+        "path": "src/skills/",
+        "reason": "fork-only centralized skills store; covered by PROJECT.md outside structure/"
+      },
+      {
+        "path": "src/workflow/",
+        "reason": "fork-only codex-led workflow engine; no upstream structure doc claims it yet"
       }
     ],
     "unboundInvariants": [
