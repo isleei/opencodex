@@ -52,6 +52,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "opencode-go": "opencode.svg",
   "opencode-zen": "opencode.svg",
   openrouter: "openrouter-color.svg",
+  opper: "opper.svg",
   qianfan: "qianfan-color.svg",
   /*
    * Qoder Global and Qoder CN are one brand on two operators (BRIGHT ZENITH
@@ -67,6 +68,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   baseten: "baseten.svg",
   bizrouter: "bizrouter.svg",
   cerebras: "cerebras.svg",
+  crusoe: "crusoe.svg",
   deepinfra: "deepinfra.svg",
   digitalocean: "digitalocean.svg",
   featherless: "featherless.svg",
@@ -144,6 +146,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",
   openrouter: "OpenRouter",
+  opper: "Opper",
   "opencode-go": "OpenCode Go",
   "opencode-free": "OpenCode Free",
   "opencode-zen": "OpenCode Zen",
@@ -231,6 +234,7 @@ const MASKED_PROVIDER_ICONS: ReadonlySet<string> = new Set([
   "nous.svg",
   "novita.svg",
   "packycode.svg",
+  "opper.svg",
   "siliconflow.svg",
   "synthetic.svg",
   "zenmux.svg",

@@ -464,7 +464,7 @@ export default function App() {
                 {page === "subscriptions" && <Subscriptions apiBase={sharedBase} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}
-                {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} />}
+                {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} catalogSyncedAt={targets.catalogSyncedAt} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
                 {page === "skills" && <SkillsMcp apiBase={sharedBase} />}
                 {page === "sessions" && <Sessions apiBase={sharedBase} />}
