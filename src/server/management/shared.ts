@@ -271,15 +271,23 @@ export function requestLogDto(
  */
 export async function fetchAllModels(
   config: OcxConfig,
-  options?: { preferCached?: boolean },
+  options?: { preferCached?: boolean; providerContentRevisions?: Map<string, string> } | Map<string, string>,
 ): Promise<CatalogModel[]> {
+  const gatherOptions = options instanceof Map
+    ? { providerContentRevisions: options }
+    : options
+      ? {
+          ...(options.preferCached ? { preferCached: true } : {}),
+          ...(options.providerContentRevisions ? { providerContentRevisions: options.providerContentRevisions } : {}),
+        }
+      : undefined;
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
-  if (!baseline) return gatherRoutedModels(config, options?.preferCached ? { preferCached: true } : undefined);
+  if (!baseline) return gatherRoutedModels(config, gatherOptions);
   const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
   const models = await gatherRoutedModels(config, {
     providerModelOutcomes: outcomes,
-    ...(options?.preferCached ? { preferCached: true } : {}),
+    ...(gatherOptions ?? {}),
   });
   finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
     outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));

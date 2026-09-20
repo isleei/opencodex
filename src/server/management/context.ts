@@ -19,6 +19,7 @@ import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
+import type { RequestMetricsSnapshotter } from "../request-metrics";
 
 import type { SkillsDirectoryConfig } from "../../skills/types";
 import type { CustomPathMap, McpConfigManager } from "../../mcp/config-manager";
@@ -39,6 +40,8 @@ export interface ManagementApiDeps {
   mcpCustomPaths?: CustomPathMap;
   /** Test injection for custom McpConfigManager instance. */
   mcpConfigManager?: McpConfigManager;
+  /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
+  requestMetrics?: RequestMetricsSnapshotter;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */

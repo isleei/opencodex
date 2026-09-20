@@ -121,6 +121,15 @@ export interface GatherRoutedModelsOptions {
    * `/v1/models` must omit this — they need the authoritative live set.
    */
   preferCached?: boolean;
+  /**
+   * Each provider's cache content revision as of the moment its rows were chosen.
+   *
+   * A caller that derives something from these rows and wants to know later whether the rows are
+   * still current must use this, not a revision sampled after the gather returns: another flight
+   * can publish between the choice and the sample, and the derived value would then carry that
+   * flight's identity while holding these rows.
+   */
+  providerContentRevisions?: Map<string, string>;
 }
 
 interface GatherFlightResult {
@@ -129,6 +138,7 @@ interface GatherFlightResult {
   providerAuthOutcomes: readonly CatalogGatherProviderAuthOutcome[];
   providerModelOutcomes: readonly CatalogGatherProviderModelOutcome[];
   discoveryPolicySnapshots: readonly CatalogProviderDiscoveryPolicySnapshot[];
+  providerContentRevisions: ReadonlyMap<string, string>;
 }
 interface GatherInflightEntry {
   readonly discoveryPolicyIdentity: string;
@@ -281,6 +291,7 @@ async function gatherRoutedModelsWithAuth(
     providerAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots,
+    providerContentRevisions,
   } = await entry.promise;
   if (options?.comboOmissions) {
     options.comboOmissions.length = 0;
@@ -293,6 +304,12 @@ async function gatherRoutedModelsWithAuth(
   if (options?.providerModelOutcomes) {
     options.providerModelOutcomes.length = 0;
     options.providerModelOutcomes.push(...providerModelOutcomes);
+  }
+  if (options?.providerContentRevisions) {
+    options.providerContentRevisions.clear();
+    for (const [provider, revision] of providerContentRevisions) {
+      options.providerContentRevisions.set(provider, revision);
+    }
   }
   if (options?.discoveryPolicySnapshots) {
     options.discoveryPolicySnapshots.length = 0;
@@ -925,6 +942,8 @@ async function gatherRoutedModelsUncached(
     providerAuthOutcomes: localProviderAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots: capture.discoveryPolicySnapshots,
+    // Stamped by each provider at the moment it chose its rows, not sampled here.
+    providerContentRevisions: new Map(providerResults.map(result => [result.outcome.provider, result.contentRevision])),
   };
 }
 
