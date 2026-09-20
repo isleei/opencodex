@@ -105,6 +105,7 @@ import { applyProviderConfigHints, applyConfigHintsToCachedModels, catalogHintsF
 import { resolveComboCatalogMember } from "./combo-member";
 import { captureGatherFlight, captureTrustedOpenAiApiPolicy, gatherFlightKey, keyedGatherBytesIdentity, withCanonicalOpenAiForwardAuthDefault } from "./gather-capture";
 import { fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "./provider-models";
+import { observeModelCacheRevision } from "../model-cache";
 
 export interface GatherRoutedModelsOptions {
   comboOmissions?: ComboCatalogOmission[];
@@ -214,6 +215,12 @@ export async function gatherRoutedModels(
     if (options.discoveryPolicySnapshots) {
       options.discoveryPolicySnapshots.length = 0;
       options.discoveryPolicySnapshots.push(...local.discoveryPolicySnapshots);
+    }
+    if (options.providerContentRevisions) {
+      options.providerContentRevisions.clear();
+      for (const [provider, revision] of local.providerContentRevisions) {
+        options.providerContentRevisions.set(provider, revision);
+      }
     }
     if (local.needsLive) kickGatherRoutedModelsBackground(config);
     return local.models;
@@ -495,6 +502,7 @@ async function gatherRoutedModelsUncached(
       models: precomputedLists[index] ?? [],
       // Local/SWR path: rows come from cache or config seeds, not a live probe.
       outcome: { provider: provider.name, state: "authoritative" as const },
+      contentRevision: observeModelCacheRevision(provider.name),
     }))
     : await Promise.all(
       activeProviders.map(provider => fetchProviderModelsWithAuth(
